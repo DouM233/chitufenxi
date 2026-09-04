@@ -63,6 +63,7 @@ node local-server.mjs
 | `DEPLOY_RUN_PORT` | — | 沙箱注入的监听端口（优先于 `CHITU_PORT`） |
 | `CHITU_PORT` | `8787` | 本地开发端口 |
 | `CHITU_HOST` | `0.0.0.0` | 监听地址（内网反代可改 `127.0.0.1`） |
+| `CHITU_CORS_ORIGIN` | `*` | CORS 允许来源（无鉴权无 Cookie 时默认 `*`，可指定单一域名收紧跨域） |
 | `CHITU_HISTORY_ROOT` | 项目同级 `赤兔历史分析结果` | 历史归档根目录（生产需指向可写目录，如 `/tmp`） |
 | `CHITU_HISTORY_LOG_FILE` | 自动查找 `long_text_*.txt` | 已确认 GPT 分析口径文件（正式链路必填，相对路径基于项目根目录） |
 | `CHITU_LLM_API_BASE` | — | OpenAI 兼容 API 根地址（必填） |

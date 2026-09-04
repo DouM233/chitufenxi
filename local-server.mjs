@@ -20,6 +20,7 @@ const historyRoot = path.resolve(
 );
 const host = process.env.CHITU_HOST || "0.0.0.0";
 const port = Number(process.env.DEPLOY_RUN_PORT || process.env.CHITU_PORT || 8787);
+const corsOrigin = process.env.CHITU_CORS_ORIGIN || "*";
 const jobsRoot = path.join(projectRoot, "storage", "jobs");
 const jobs = new Map();
 const jobQueue = [];
@@ -44,7 +45,7 @@ const mimeTypes = {
 function sendJson(res, statusCode, body) {
   res.writeHead(statusCode, {
     "content-type": "application/json; charset=utf-8",
-    "access-control-allow-origin": `http://127.0.0.1:${port}`,
+    "access-control-allow-origin": corsOrigin,
     "access-control-allow-methods": "GET,POST,OPTIONS",
     "access-control-allow-headers": "content-type"
   });
@@ -54,7 +55,7 @@ function sendJson(res, statusCode, body) {
 function sendText(res, statusCode, text) {
   res.writeHead(statusCode, {
     "content-type": "text/plain; charset=utf-8",
-    "access-control-allow-origin": `http://127.0.0.1:${port}`
+    "access-control-allow-origin": corsOrigin
   });
   res.end(text);
 }
@@ -658,11 +659,13 @@ async function drainJobQueue() {
       error: null
     });
   } catch (error) {
+    const normalized = normalizeJobError(error);
+    console.error(`任务 ${job.task_id} 分析失败：`, normalized);
     await updateJob(job, {
       status: "failed",
       stage: job.stage || "analysis",
       message: "本次分析没有完成",
-      error: normalizeJobError(error)
+      error: normalized
     });
   } finally {
     activeJobs -= 1;
@@ -791,7 +794,7 @@ async function handleDownload(req, res) {
   res.writeHead(200, {
     "content-type": mimeTypes[ext] || "application/octet-stream",
     "content-disposition": `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`,
-    "access-control-allow-origin": `http://127.0.0.1:${port}`
+    "access-control-allow-origin": corsOrigin
   });
   res.end(body);
 }
@@ -800,7 +803,8 @@ async function serveStatic(req, res) {
   const url = new URL(req.url || "/", `http://127.0.0.1:${port}`);
   const requestedPath = decodeURIComponent(url.pathname === "/" ? "/index.html" : url.pathname);
   const target = path.normalize(path.join(webRoot, requestedPath));
-  if (!target.startsWith(webRoot)) {
+  const relative = path.relative(webRoot, target);
+  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
     sendText(res, 403, "Forbidden");
     return;
   }
@@ -812,7 +816,7 @@ async function serveStatic(req, res) {
   const body = await readFile(target);
   res.writeHead(200, {
     "content-type": mimeTypes[ext] || "application/octet-stream",
-    "access-control-allow-origin": "*"
+    "access-control-allow-origin": corsOrigin
   });
   res.end(body);
 }
