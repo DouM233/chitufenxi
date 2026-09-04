@@ -1,0 +1,25 @@
+{
+  "task_id": "{{task_id}}",
+  "product_name": "{{product_name}}",
+  "analysis_type": "{{analysis_type}}",
+  "period_start": "{{period_start}}",
+  "period_end": "{{period_end}}",
+  "model": "gpt5.6sol",
+  "status": "completed",
+  "input_files": [],
+  "process_files": [],
+  "output_files": {
+    "excel": "",
+    "markdown": "",
+    "manifest": "result_manifest.json"
+  },
+  "quality_gates": {
+    "scope_check": "PASS",
+    "label_consistency": "PASS",
+    "dedupe_check": "PASS",
+    "p0_second_review": "PASS",
+    "excel_acceptance": "PASS"
+  },
+  "created_at": "{{created_at}}"
+}
+

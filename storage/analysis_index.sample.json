@@ -1,0 +1,16 @@
+[
+  {
+    "task_id": "20260725_0823_匹克筋膜枪",
+    "product_name": "匹克筋膜枪",
+    "analysis_type": "first_baseline",
+    "period_start": "2026-07-25",
+    "period_end": "2026-08-23",
+    "model": "gpt5.6sol",
+    "status": "completed",
+    "excel_file": "赤兔历史分析结果/匹克筋膜枪_20260725-0823_首次客服聊天需求基准分析报告.xlsx",
+    "markdown_file": "",
+    "created_at": "2026-08-26 00:00:00",
+    "notes": "旧文件登记示例"
+  }
+]
+

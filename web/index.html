@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>赤兔客服聊天分析</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="app-header">
+        <div>
+          <h1>赤兔客服聊天分析</h1>
+          <p>上传聊天记录，生成标准 Excel 分析报告</p>
+        </div>
+        <span id="connectionStatus" class="service-status">正在检查服务</span>
+      </header>
+
+      <section class="workspace" aria-labelledby="analysisTitle">
+        <div class="section-heading">
+          <div>
+            <h2 id="analysisTitle">新建分析</h2>
+            <p>分析内容由 GPT 根据本次聊天生成，Excel 只复用正式母版格式。</p>
+          </div>
+        </div>
+
+        <form id="analysisForm">
+          <fieldset class="mode-fieldset">
+            <legend>分析方式</legend>
+            <div class="segmented-control">
+              <label>
+                <input type="radio" name="analysisMode" value="first_baseline" checked />
+                <span>仅分析本次聊天</span>
+              </label>
+              <label>
+                <input type="radio" name="analysisMode" value="baseline_compare" />
+                <span>与上次基准对比</span>
+              </label>
+            </div>
+          </fieldset>
+
+          <div class="metadata-grid">
+            <label>
+              <span>产品名称</span>
+              <input id="productName" type="text" value="丹橘卷发棒三款产品" autocomplete="off" />
+            </label>
+            <label>
+              <span>分析周期</span>
+              <input id="analysisPeriod" type="text" placeholder="例如：2026-08-01 至 2026-08-31" autocomplete="off" />
+            </label>
+          </div>
+
+          <div class="upload-grid">
+            <label class="upload-panel" for="chatFiles">
+              <span class="upload-title">本次聊天记录 <strong>必填</strong></span>
+              <span class="upload-copy">支持多个 .log、.txt 或 .csv 文件</span>
+              <span class="upload-action">选择聊天文件</span>
+              <input id="chatFiles" type="file" multiple accept=".csv,.log,.txt" />
+            </label>
+
+            <label id="baselinePanel" class="upload-panel hidden" for="baselineFile">
+              <span class="upload-title">上次基准报告 <strong>必填</strong></span>
+              <span class="upload-copy">用于词条和指标对照，不作为输出模板</span>
+              <span class="upload-action">选择基准 Excel</span>
+              <input id="baselineFile" type="file" accept=".xlsx,.xls" />
+            </label>
+          </div>
+
+          <div id="fileList" class="file-list" aria-live="polite"></div>
+          <div id="formError" class="form-error hidden" role="alert"></div>
+
+          <div class="form-actions">
+            <button id="startAnalysis" class="primary-button" type="submit">开始分析</button>
+          </div>
+        </form>
+      </section>
+
+      <section id="taskPanel" class="task-panel hidden" aria-live="polite">
+        <div class="task-head">
+          <div>
+            <span id="taskState" class="task-state">排队中</span>
+            <h2 id="taskMessage">任务已创建</h2>
+          </div>
+          <span id="taskProgressText" class="progress-text">0%</span>
+        </div>
+        <div class="progress-track" aria-hidden="true">
+          <div id="progressBar" class="progress-bar"></div>
+        </div>
+        <p id="chunkProgress" class="chunk-progress"></p>
+        <div id="taskError" class="task-error hidden"></div>
+        <details id="technicalDetails" class="technical-details hidden">
+          <summary>查看技术详情</summary>
+          <pre id="technicalError"></pre>
+        </details>
+        <div id="taskActions" class="task-actions hidden">
+          <button id="retryTask" class="secondary-button" type="button">重新分析</button>
+        </div>
+      </section>
+
+      <section id="resultPanel" class="result-panel hidden">
+        <div>
+          <span class="success-label">分析完成</span>
+          <h2>标准 Excel 报告已生成</h2>
+          <p id="resultSummary">可以下载查看完整结果。</p>
+        </div>
+        <div class="result-actions">
+          <a id="downloadExcel" class="primary-button" href="#">下载 Excel</a>
+          <details>
+            <summary>更多文件</summary>
+            <div class="more-links">
+              <a id="downloadMarkdown" href="#">管理结论</a>
+              <a id="downloadManifest" href="#">任务清单</a>
+            </div>
+          </details>
+        </div>
+      </section>
+    </main>
+
+    <script src="./config.js"></script>
+    <script src="./app.js"></script>
+  </body>
+</html>

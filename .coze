@@ -1,0 +1,10 @@
+[project]
+requires = ["nodejs-24"]
+
+[dev]
+build = ["python3", "-m", "pip", "install", "--quiet", "openpyxl"]
+run = ["node", "local-server.mjs"]
+
+[deploy]
+build = ["python3", "-m", "pip", "install", "--quiet", "openpyxl"]
+run = ["node", "local-server.mjs"]

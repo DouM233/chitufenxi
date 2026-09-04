@@ -1,0 +1,47 @@
+product_name: 冷雾夹板
+product_id: ""
+category: 美发工具
+
+analysis:
+  default_type: first_baseline
+  model: gpt5.6sol
+
+dedupe_rule:
+  - buyer
+  - stage
+  - label
+  - period
+
+forced_rules:
+  使用方法: 售后
+  怎么操作: 售后
+  安装教程: 售后
+  充电方法: 售后
+
+risk_rules:
+  - 漏电
+  - 流血
+  - 过敏
+  - 烫伤
+  - 冒烟
+  - 破损
+  - 无法开机
+  - 异常发热
+  - 严重疼痛
+
+baseline:
+  version: V1
+  file: ""
+  period_start: ""
+  period_end: ""
+
+output:
+  history_root: 赤兔历史分析结果
+  excel_required: true
+  markdown_summary_required: true
+
+notes:
+  - 新品首次分析禁止继承其他产品词条
+  - 有历史基准时优先沿用旧词条
+  - P0/质量/安全问题必须保留原话证据
+

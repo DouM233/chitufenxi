@@ -1,0 +1,340 @@
+{
+  "template": "templates\\excel\\��SKU�״λ�׼_��������׼ģ��.xlsx",
+  "output": "E:\\��2\\������ʷ�������\\03_���ձ���\\2026\\09\\6c7f9e9e-b3a4-440a-bdea-31b4b9dbf59a\\���پ����������Ʒ_20260901_�ͷ����������������.xlsx",
+  "template_zip_bad_part": null,
+  "output_zip_bad_part": null,
+  "zip_part_sets_equal": true,
+  "changed_non_worksheet_parts": [],
+  "all_xml_parts_valid": true,
+  "xml_errors": [],
+  "styles_hash_equal": true,
+  "output_style_ids_subset_of_template": false,
+  "sheet_names_exact": true,
+  "sheet_count": 17,
+  "chart_count": 4,
+  "merged_range_count": 26,
+  "formula_or_value_errors": [],
+  "placeholder_hits": [],
+  "sheet_stats": [
+    {
+      "name": "��������",
+      "rows": 21,
+      "columns": 12,
+      "non_empty": 86,
+      "charts": 1,
+      "merged_ranges": 9
+    },
+    {
+      "name": "�����Ʒ�Ա�",
+      "rows": 30,
+      "columns": 10,
+      "non_empty": 139,
+      "charts": 0,
+      "merged_ranges": 1
+    },
+    {
+      "name": "856��ǰV1",
+      "rows": 26,
+      "columns": 12,
+      "non_empty": 92,
+      "charts": 0,
+      "merged_ranges": 2
+    },
+    {
+      "name": "856�ۺ�V1",
+      "rows": 28,
+      "columns": 12,
+      "non_empty": 80,
+      "charts": 0,
+      "merged_ranges": 2
+    },
+    {
+      "name": "366��ǰV1",
+      "rows": 24,
+      "columns": 12,
+      "non_empty": 80,
+      "charts": 0,
+      "merged_ranges": 2
+    },
+    {
+      "name": "366�ۺ�V1",
+      "rows": 15,
+      "columns": 12,
+      "non_empty": 56,
+      "charts": 0,
+      "merged_ranges": 2
+    },
+    {
+      "name": "���һ��ǰV1",
+      "rows": 27,
+      "columns": 12,
+      "non_empty": 80,
+      "charts": 0,
+      "merged_ranges": 2
+    },
+    {
+      "name": "���һ�ۺ�V1",
+      "rows": 16,
+      "columns": 12,
+      "non_empty": 68,
+      "charts": 0,
+      "merged_ranges": 2
+    },
+    {
+      "name": "������ȫ����",
+      "rows": 424,
+      "columns": 11,
+      "non_empty": 4633,
+      "charts": 0,
+      "merged_ranges": 2
+    },
+    {
+      "name": "���Ʒ����",
+      "rows": 11,
+      "columns": 10,
+      "non_empty": 62,
+      "charts": 0,
+      "merged_ranges": 1
+    },
+    {
+      "name": "ÿ������",
+      "rows": 93,
+      "columns": 10,
+      "non_empty": 629,
+      "charts": 3,
+      "merged_ranges": 1
+    },
+    {
+      "name": "����������ϸ",
+      "rows": 1927,
+      "columns": 13,
+      "non_empty": 13284,
+      "charts": 0,
+      "merged_ranges": 0
+    },
+    {
+      "name": "ͬ���ظ���¼",
+      "rows": 978,
+      "columns": 10,
+      "non_empty": 9780,
+      "charts": 0,
+      "merged_ranges": 0
+    },
+    {
+      "name": "���˹�����",
+      "rows": 112,
+      "columns": 8,
+      "non_empty": 896,
+      "charts": 0,
+      "merged_ranges": 0
+    },
+    {
+      "name": "V1�����ֵ�",
+      "rows": 43,
+      "columns": 7,
+      "non_empty": 91,
+      "charts": 0,
+      "merged_ranges": 0
+    },
+    {
+      "name": "�ھ�˵��",
+      "rows": 12,
+      "columns": 3,
+      "non_empty": 36,
+      "charts": 0,
+      "merged_ranges": 0
+    },
+    {
+      "name": "��Ч�����Ϣ",
+      "rows": 4779,
+      "columns": 6,
+      "non_empty": 28674,
+      "charts": 0,
+      "merged_ranges": 0
+    }
+  ],
+  "overview_preview": [
+    [
+      "���پ������������Ʒ���״οͷ����������׼��2026-07-26 �� 2026-08-24��",
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ],
+    [
+      "�״η�����������������Ʒ��ʷ����������ֱ����ͳ�ƣ�ͬһ��Ʒ����ң��׶Σ���������ڱ�����ֻ��1�Σ�һ�仰�ɲ�������������ȫҳ�������պ�ѡ�����˹�����У׼��",
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ],
+    [
+      "856����ֱ��У�ֱ�����ã�",
+      null,
+      null,
+      null,
+      "366 32mm������",
+      null,
+      null,
+      null,
+      "���һ��ͷ������",
+      null,
+      null,
+      null
+    ],
+    [
+      "��ʽ����",
+      "��ǰ",
+      "�ۺ�",
+      "ǿ����",
+      "��ʽ����",
+      "��ǰ",
+      "�ۺ�",
+      "ǿ����",
+      "��ʽ����",
+      "��ǰ",
+      "�ۺ�",
+      "ǿ����"
+    ],
+    [
+      783,
+      282,
+      501,
+      318,
+      131,
+      44,
+      87,
+      58,
+      192,
+      27,
+      165,
+      44
+    ],
+    [
+      "��Ʒ",
+      "��Ч���",
+      "��ʽ����",
+      "��ǰ",
+      "�ۺ�",
+      "�ۺ�ռ��",
+      "�ظ��޳�",
+      null,
+      "��Ʒ",
+      "��ǰ��һ",
+      "�ۺ��һ",
+      "�����ж�"
+    ],
+    [
+      "856����ֱ��У�ֱ�����ã�",
+      519,
+      783,
+      282,
+      501,
+      0.6398467432950191,
+      686,
+      null,
+      "856",
+      "����������ѯ 103��",
+      "����ʹ����Ԥ�� 157��",
+      "���ȴ�����Ƶ���󲢳������˷��պ�ѡ"
+    ],
+    [
+      "366 32mm������",
+      183,
+      131,
+      44,
+      87,
+      0.6641221374045801,
+      127,
+      null,
+      "366",
+      "�����˻����� 17��",
+      "����ʹ����Ԥ�� 43��",
+      "���ȴ�����Ƶ���󲢳������˷��պ�ѡ"
+    ],
+    [
+      "���һ��ͷ������",
+      192,
+      192,
+      27,
+      165,
+      0.859375,
+      164,
+      null,
+      "���һ",
+      "�����˻����� 14��",
+      "��ͷ��װ���� 76��",
+      "���ȴ�����Ƶ���󲢳������˷��պ�ѡ"
+    ],
+    [
+      "�״�V1���Ľ���",
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ],
+    [
+      "1",
+      "���ݣ������Ʒ�ϼ�894����ҡ�1106����������856����������519����ң�58.1%����783������70.8%����318�����ռ�¼��ռ����420�����ռ�¼��75.7%�����жϣ�856�ǵ�ǰ�ͷ�ѹ�����Ʒ���յ���Ҫ��Դ�����������ͷ����ʼ�Ͳ�Ʒ�Ż���Դ����Ͷ��856�����ܸ��������������ռ�¼������ջ��ʡ�",
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ],
+    [
+      "2",
+      "���ݣ������Ʒ�ۺ�����ϼ�753����ռȫ�������68.1%�����һ��366��856���ۺ�ռ�ȷֱ�Ϊ85.9%��66.4%��64.0%���жϣ���ѯ�������Ժ��ƣ�������ʹ��ָ�������⴦�����㡣���������������Ʒ�������״�ʹ��ָ�����ڰ�����������ҳ�Ϳͷ��Զ��ظ���ͬ����Ƶ��Ԥ��˵���������Ų���ڡ�",
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ],
+    [
+      "3",
+      "���ݣ�����ʹ����Ԥ����������ϼ�255��������856Ϊ157�������һ55����366Ϊ43���������ͬ�ĸ�Ƶ���⡣�жϣ�Ԥ��ʱ����ָʾ��״̬�Ͳ�������˵�����壬���ڳ������Ŀͷ����ܡ�������ͳһ��Ƶ�ṹ�����ͺŷֱ������̳̣���ȷ�������¶����á�Ԥ����ɱ�־���Ƽ����ʲ����������ý̳���Ϊ�ۺ������Զ��ظ���",
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  ]
+}

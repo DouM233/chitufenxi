@@ -12,6 +12,8 @@ __pycache__/
 *.egg-info/
 /.env
 .env
+.env.*
+!.env.example
 .cozeproj/reduction
 
 # JS/TS bundlers & build outputs
@@ -86,6 +88,13 @@ logs/
 *.pptx
 *.xlsx
 *.csv
+
+# 赤兔运行时产物（任务快照与 LLM 缓存）
+/storage/jobs/
+/storage/cache/
+
+# 赤兔 Excel 母版属于发布资产，必须纳入版本管理
+!templates/excel/*.xlsx
 
 # Preview files
 .preview
