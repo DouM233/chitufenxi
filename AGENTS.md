@@ -64,7 +64,8 @@ node local-server.mjs
 | `CHITU_PORT` | `8787` | 本地开发端口 |
 | `CHITU_HOST` | `0.0.0.0` | 监听地址（内网反代可改 `127.0.0.1`） |
 | `CHITU_CORS_ORIGIN` | `*` | CORS 允许来源（无鉴权无 Cookie 时默认 `*`，可指定单一域名收紧跨域） |
-| `CHITU_HISTORY_ROOT` | 项目同级 `赤兔历史分析结果` | 历史归档根目录（生产需指向可写目录，如 `/tmp`） |
+| `CHITU_STATE_ROOT` | DEV=项目 `storage/`；PROD=`/tmp/chitu-state` | 运行时状态目录（任务快照 jobs + LLM 缓存 cache/llm） |
+| `CHITU_HISTORY_ROOT` | DEV=项目同级 `赤兔历史分析结果`；PROD=`/tmp/chitu-history` | 历史归档根目录（生产需指向持久化存储，`/tmp` 会被清理） |
 | `CHITU_HISTORY_LOG_FILE` | 自动查找 `long_text_*.txt` | 已确认 GPT 分析口径文件（正式链路必填，相对路径基于项目根目录） |
 | `CHITU_LLM_API_BASE` | — | OpenAI 兼容 API 根地址（必填） |
 | `CHITU_LLM_API_KEY` | — | 服务器端 Bearer Token（必填，绝不放前端） |
@@ -87,7 +88,7 @@ node local-server.mjs
 - 完整性门禁：`expected_messages` 必须等于 `analyzed_messages`，否则拒绝发布 Excel。
 - Excel 样式只来自 `templates/excel/` 母版；基准文件只提供数据，不是样式来源。
 - API Key 严禁写入 `web/`、`window.CHITU_CONFIG`、日志或接口响应。
-- 生产环境 `CHITU_HISTORY_ROOT` 必须指向可写目录（沙箱 PROD 仅 `/tmp` 可写）。
+- 生产环境（`COZE_PROJECT_ENV=PROD` 或 `NODE_ENV=production`）下，运行时状态（`CHITU_STATE_ROOT`）与历史归档（`CHITU_HISTORY_ROOT`）默认都落在 `/tmp`（`/tmp/chitu-state`、`/tmp/chitu-history`）；`/tmp` 是临时目录且可能被清理，长期归档需接对象存储或持久卷。
 
 ## 修复定位
 

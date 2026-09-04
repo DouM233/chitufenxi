@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { Readable } from "node:stream";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { tmpdir } from "node:os";
 
 const __filename = fileURLToPath(import.meta.url);
 const projectRoot = path.dirname(__filename);
@@ -15,13 +16,23 @@ const webRoot = path.join(projectRoot, "web");
 loadEnvFile(path.join(projectRoot, ".env.local"));
 loadEnvFile(path.join(projectRoot, ".env"));
 
+// 生产环境（veFaaS 等）代码目录 /opt/bytefaas 为只读，
+// 任务快照 / LLM 缓存 / 历史归档等运行时写入必须落到可写目录（/tmp）。
+// DEV 环境仍沿用项目内目录，行为不变。
+const isProdEnv = process.env.COZE_PROJECT_ENV === "PROD" || process.env.NODE_ENV === "production";
+const stateRoot = path.resolve(
+  process.env.CHITU_STATE_ROOT ||
+    (isProdEnv ? path.join(tmpdir(), "chitu-state") : path.join(projectRoot, "storage"))
+);
 const historyRoot = path.resolve(
-  process.env.CHITU_HISTORY_ROOT || path.join(workspaceRoot, "赤兔历史分析结果")
+  process.env.CHITU_HISTORY_ROOT ||
+    (isProdEnv ? path.join(tmpdir(), "chitu-history") : path.join(workspaceRoot, "赤兔历史分析结果"))
 );
 const host = process.env.CHITU_HOST || "0.0.0.0";
 const port = Number(process.env.DEPLOY_RUN_PORT || process.env.CHITU_PORT || 8787);
 const corsOrigin = process.env.CHITU_CORS_ORIGIN || "*";
-const jobsRoot = path.join(projectRoot, "storage", "jobs");
+const jobsRoot = path.join(stateRoot, "jobs");
+const llmCacheRoot = path.join(stateRoot, "cache", "llm");
 const jobs = new Map();
 const jobQueue = [];
 const maxActiveJobs = Math.max(1, Number(process.env.CHITU_MAX_ACTIVE_JOBS || 1));
@@ -306,7 +317,7 @@ async function runCurlingIronCodexReport(chatFiles, baselineFiles, excelPath, ma
   const env = {
     CHITU_CURLING_INPUTS_JSON: JSON.stringify(inputSpec),
     CHITU_OUTPUT_ROOT: specializedOutputRoot,
-    CHITU_LLM_CACHE_DIR: path.join(projectRoot, "storage", "cache", "llm"),
+    CHITU_LLM_CACHE_DIR: llmCacheRoot,
     CHITU_LLM_TIMEOUT: "240",
     CHITU_LLM_RETRIES: "3",
     CHITU_LLM_MAX_ATTEMPTS: "0",
@@ -342,7 +353,7 @@ async function runXiaoqipao2449CodexReport(chatFiles, baselineFiles, excelPath, 
   const env = {
     CHITU_INPUT_CSV: chatFile.path,
     CHITU_OUTPUT_ROOT: specializedOutputRoot,
-    CHITU_LLM_CACHE_DIR: path.join(projectRoot, "storage", "cache", "llm")
+    CHITU_LLM_CACHE_DIR: llmCacheRoot
   };
   if (baselineFile) {
     env.CHITU_BASELINE_XLSX = baselineFile.path;
@@ -482,7 +493,7 @@ async function executeAnalysis(payload, files, onProgress = () => {}) {
     await runPython(
       path.join(projectRoot, "scripts", "generate_report.py"),
       [reportDataPath, excelPath],
-      { CHITU_LLM_CACHE_DIR: path.join(projectRoot, "storage", "cache", "llm") },
+      { CHITU_LLM_CACHE_DIR: llmCacheRoot },
       onProgress
     );
     const analyzedReportData = JSON.parse(await readFile(reportDataPath, "utf8"));
