@@ -35,7 +35,7 @@ const jobsRoot = path.join(stateRoot, "jobs");
 const llmCacheRoot = path.join(stateRoot, "cache", "llm");
 const jobs = new Map();
 const jobQueue = [];
-const maxActiveJobs = Math.max(1, Number(process.env.CHITU_MAX_ACTIVE_JOBS || 4));
+const maxActiveJobs = Math.max(1, Number(process.env.CHITU_MAX_ACTIVE_JOBS || 12));
 let activeJobs = 0;
 
 const runtimeConfig = {

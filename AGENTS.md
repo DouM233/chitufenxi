@@ -70,7 +70,7 @@ node local-server.mjs
 | `CHITU_LLM_API_BASE` | — | OpenAI 兼容 API 根地址（**生产部署必配**：`.env.local` 不进部署产物，需配在平台环境变量/密钥里） |
 | `CHITU_LLM_API_KEY` | — | 服务器端 Bearer Token（**生产部署必配**，绝不放前端） |
 | `CHITU_ANALYSIS_MODEL` | `gpt-5.6-sol` | 模型标识 |
-| `CHITU_MAX_ACTIVE_JOBS` | `4` | 并发分析任务数；超过并发的任务才进入队列排队（可调大以减少排队） |
+| `CHITU_MAX_ACTIVE_JOBS` | `12` | 并发分析任务数；超过并发的任务才进入队列排队（可调大以减少排队；注意每个任务是独立 Python 子进程，内存峰值 ≈ 任务数 × 约 100MB） |
 | `CHITU_LLM_WORKERS` | `3` | 单个任务内分类/风险复核并发线程数（LLM 总并发 ≈ 活跃任务数 × 此值） |
 
 ## 数据请求接口
