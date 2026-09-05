@@ -34,12 +34,21 @@ def load_historical_logic():
             path_candidate = Path(__file__).resolve().parents[1] / path_candidate
         candidates = [path_candidate]
     else:
-        workspace_root = Path(__file__).resolve().parents[2]
-        candidates = sorted(
-            workspace_root.glob("long_text_*.txt"),
-            key=lambda item: item.stat().st_mtime,
-            reverse=True,
-        )
+        # 优先在项目内置 storage 目录查找（git 跟踪、随部署产物自带），
+        # 兜底沿用旧约定：项目同级工作区根目录（历史习惯存放位置）。
+        project_root = Path(__file__).resolve().parents[1]
+        workspace_root = project_root.parent
+        candidates = []
+        seen = set()
+        for search_root in (project_root / "storage", workspace_root):
+            if not search_root.is_dir():
+                continue
+            for item in search_root.glob("long_text_*.txt"):
+                if item in seen:
+                    continue
+                seen.add(item)
+                candidates.append(item)
+        candidates.sort(key=lambda item: item.stat().st_mtime, reverse=True)
     for candidate in candidates:
         if not candidate.exists():
             continue

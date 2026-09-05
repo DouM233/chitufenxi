@@ -66,9 +66,9 @@ node local-server.mjs
 | `CHITU_CORS_ORIGIN` | `*` | CORS 允许来源（无鉴权无 Cookie 时默认 `*`，可指定单一域名收紧跨域） |
 | `CHITU_STATE_ROOT` | DEV=项目 `storage/`；PROD=`/tmp/chitu-state` | 运行时状态目录（任务快照 jobs + LLM 缓存 cache/llm） |
 | `CHITU_HISTORY_ROOT` | DEV=项目同级 `赤兔历史分析结果`；PROD=`/tmp/chitu-history` | 历史归档根目录（生产需指向持久化存储，`/tmp` 会被清理） |
-| `CHITU_HISTORY_LOG_FILE` | 自动查找 `long_text_*.txt` | 已确认 GPT 分析口径文件（正式链路必填，相对路径基于项目根目录） |
-| `CHITU_LLM_API_BASE` | — | OpenAI 兼容 API 根地址（必填） |
-| `CHITU_LLM_API_KEY` | — | 服务器端 Bearer Token（必填，绝不放前端） |
+| `CHITU_HISTORY_LOG_FILE` | 自动查找项目内 `storage/` 及项目同级 `long_text_*.txt` | 已确认 GPT 分析口径文件（相对路径基于项目根目录；文件随部署产物自带，生产可不配） |
+| `CHITU_LLM_API_BASE` | — | OpenAI 兼容 API 根地址（**生产部署必配**：`.env.local` 不进部署产物，需配在平台环境变量/密钥里） |
+| `CHITU_LLM_API_KEY` | — | 服务器端 Bearer Token（**生产部署必配**，绝不放前端） |
 | `CHITU_ANALYSIS_MODEL` | `gpt-5.6-sol` | 模型标识 |
 | `CHITU_MAX_ACTIVE_JOBS` | `1` | 并发分析任务数 |
 | `CHITU_LLM_WORKERS` | `6` | 分类/风险复核并发线程数 |
