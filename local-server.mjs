@@ -35,7 +35,7 @@ const jobsRoot = path.join(stateRoot, "jobs");
 const llmCacheRoot = path.join(stateRoot, "cache", "llm");
 const jobs = new Map();
 const jobQueue = [];
-const maxActiveJobs = Math.max(1, Number(process.env.CHITU_MAX_ACTIVE_JOBS || 1));
+const maxActiveJobs = Math.max(1, Number(process.env.CHITU_MAX_ACTIVE_JOBS || 4));
 let activeJobs = 0;
 
 const runtimeConfig = {
@@ -638,10 +638,15 @@ function normalizeJobError(error) {
   };
 }
 
-async function drainJobQueue() {
-  if (activeJobs >= maxActiveJobs || !jobQueue.length) return;
-  const job = jobQueue.shift();
-  activeJobs += 1;
+function drainJobQueue() {
+  while (activeJobs < maxActiveJobs && jobQueue.length) {
+    const job = jobQueue.shift();
+    activeJobs += 1;
+    void runJob(job);
+  }
+}
+
+async function runJob(job) {
   await updateJob(job, {
     status: "running",
     stage: "starting",
@@ -843,7 +848,12 @@ createServer(async (req, res) => {
       return;
     }
     if (req.method === "GET" && pathname === "/api/health") {
-      sendJson(res, 200, { status: "ok", active_jobs: activeJobs, queued_jobs: jobQueue.length });
+      sendJson(res, 200, {
+        status: "ok",
+        active_jobs: activeJobs,
+        queued_jobs: jobQueue.length,
+        max_active_jobs: maxActiveJobs
+      });
       return;
     }
     if (req.method === "POST" && (pathname === "/api/chitu-analyze" || pathname === "/api/tasks")) {

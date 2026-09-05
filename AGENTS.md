@@ -70,8 +70,8 @@ node local-server.mjs
 | `CHITU_LLM_API_BASE` | — | OpenAI 兼容 API 根地址（**生产部署必配**：`.env.local` 不进部署产物，需配在平台环境变量/密钥里） |
 | `CHITU_LLM_API_KEY` | — | 服务器端 Bearer Token（**生产部署必配**，绝不放前端） |
 | `CHITU_ANALYSIS_MODEL` | `gpt-5.6-sol` | 模型标识 |
-| `CHITU_MAX_ACTIVE_JOBS` | `1` | 并发分析任务数 |
-| `CHITU_LLM_WORKERS` | `6` | 分类/风险复核并发线程数 |
+| `CHITU_MAX_ACTIVE_JOBS` | `4` | 并发分析任务数；超过并发的任务才进入队列排队（可调大以减少排队） |
+| `CHITU_LLM_WORKERS` | `3` | 单个任务内分类/风险复核并发线程数（LLM 总并发 ≈ 活跃任务数 × 此值） |
 
 ## 数据请求接口
 
@@ -84,6 +84,7 @@ node local-server.mjs
 ## 常见坑与注意事项
 
 - 服务是单进程内存队列 + `storage/jobs` 快照；**不能多实例部署**，重启后未完成任务不可原地重试（`SERVICE_RESTARTED`）。
+- 多任务并行是安全的：每个任务独立 Python 子进程，上传/过程/结果目录均按 task_id 隔离；LLM 缓存按内容哈希共享。上游限流（429）由 Python 内置指数退避重试兜底。
 - 一个聊天文件 = 一个商品/SKU；多商品必须分文件上传，不能拼接成单文件。
 - 完整性门禁：`expected_messages` 必须等于 `analyzed_messages`，否则拒绝发布 Excel。
 - Excel 样式只来自 `templates/excel/` 母版；基准文件只提供数据，不是样式来源。
