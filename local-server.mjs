@@ -581,20 +581,37 @@ async function executeAnalysis(payload, files, onProgress = () => {}) {
   await mkdir(indexDir, { recursive: true });
   await writeFile(path.join(indexDir, `${taskId}.json`), JSON.stringify(manifest, null, 2), "utf8");
 
+  const filesResult = {
+    excel: excelPath,
+    markdown: markdownPath,
+    manifest: manifestPath,
+    excel_download_url: downloadUrl(excelPath),
+    markdown_download_url: downloadUrl(markdownPath),
+    manifest_download_url: downloadUrl(manifestPath),
+    excel_filename: path.basename(excelPath),
+    markdown_filename: path.basename(markdownPath),
+    manifest_filename: path.basename(manifestPath)
+  };
+  try {
+    const [excelBytes, markdownBytes, manifestBytes] = await Promise.all([
+      readFile(excelPath),
+      readFile(markdownPath),
+      readFile(manifestPath)
+    ]);
+    filesResult.excel_data_url = `data:${mimeTypes[".xlsx"]};base64,${excelBytes.toString("base64")}`;
+    filesResult.markdown_data_url = `data:text/markdown;charset=utf-8;base64,${markdownBytes.toString("base64")}`;
+    filesResult.manifest_data_url = `data:application/json;charset=utf-8;base64,${manifestBytes.toString("base64")}`;
+  } catch (error) {
+    console.error(`任务 ${taskId} 产物内嵌失败，下载退回服务端路径：`, error?.message || error);
+  }
+
   return {
     status: "completed",
     report_level: reportLevel,
     message: responseMessage,
     task_id: taskId,
     summary: finalSummary,
-    files: {
-      excel: excelPath,
-      markdown: markdownPath,
-      manifest: manifestPath,
-      excel_download_url: downloadUrl(excelPath),
-      markdown_download_url: downloadUrl(markdownPath),
-      manifest_download_url: downloadUrl(manifestPath)
-    }
+    files: filesResult
   };
 }
 

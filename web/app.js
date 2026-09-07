@@ -167,13 +167,23 @@
     el.technicalError.textContent = detail;
   }
 
+  function applyDownload(anchor, dataUrl, serverUrl, filename) {
+    if (dataUrl) {
+      anchor.href = dataUrl;
+      if (filename) anchor.setAttribute("download", filename);
+      return;
+    }
+    anchor.removeAttribute("download");
+    anchor.href = serverUrl || "#";
+  }
+
   function renderResult(result) {
     const files = result?.files || {};
     const summary = Array.isArray(result?.summary) ? result.summary : [];
     el.resultSummary.textContent = summary[0] || "可以下载查看完整结果。";
-    el.downloadExcel.href = files.excel_download_url || "#";
-    el.downloadMarkdown.href = files.markdown_download_url || "#";
-    el.downloadManifest.href = files.manifest_download_url || "#";
+    applyDownload(el.downloadExcel, files.excel_data_url, files.excel_download_url, files.excel_filename);
+    applyDownload(el.downloadMarkdown, files.markdown_data_url, files.markdown_download_url, files.markdown_filename);
+    applyDownload(el.downloadManifest, files.manifest_data_url, files.manifest_download_url, files.manifest_filename);
     setHidden(el.resultPanel, false);
   }
 
