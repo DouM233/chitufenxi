@@ -15,8 +15,13 @@
     productName: document.querySelector("#productName"),
     analysisPeriod: document.querySelector("#analysisPeriod"),
     chatFiles: document.querySelector("#chatFiles"),
-    baselineFile: document.querySelector("#baselineFile"),
     baselinePanel: document.querySelector("#baselinePanel"),
+    baselineText: document.querySelector("#baselineText"),
+    baselineDays: document.querySelector("#baselineDays"),
+    baselinePeriod: document.querySelector("#baselinePeriod"),
+    baselineTextBlock: document.querySelector("#baselineTextBlock"),
+    baselineFileBlock: document.querySelector("#baselineFileBlock"),
+    baselineFile: document.querySelector("#baselineFile"),
     fileList: document.querySelector("#fileList"),
     formError: document.querySelector("#formError"),
     startAnalysis: document.querySelector("#startAnalysis"),
@@ -42,6 +47,10 @@
     return document.querySelector('input[name="analysisMode"]:checked').value;
   }
 
+  function baselineMode() {
+    return document.querySelector('input[name="baselineMode"]:checked')?.value || "text";
+  }
+
   function formatSize(bytes) {
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -55,7 +64,9 @@
   function renderFiles() {
     el.fileList.innerHTML = "";
     const items = state.chatFiles.map((file) => ({ file, role: "本次聊天" }));
-    if (state.baselineFile) items.push({ file: state.baselineFile, role: "上次基准" });
+    if (state.baselineFile && mode() === "baseline_compare" && baselineMode() === "file") {
+      items.push({ file: state.baselineFile, role: "上次基准" });
+    }
     for (const item of items) {
       const row = document.createElement("div");
       row.className = "file-row";
@@ -72,21 +83,31 @@
 
   function validate() {
     if (!state.chatFiles.length) return "请至少选择一份本次聊天记录。";
-    if (mode() === "baseline_compare" && !state.baselineFile) return "对比分析需要上传上次基准报告。";
+    if (mode() === "baseline_compare" && baselineMode() === "text" && !el.baselineText.value.trim()) {
+      return "请在「粘贴上期词条」里填入上期内容，或切换为上传基准 Excel。";
+    }
+    if (mode() === "baseline_compare" && baselineMode() === "file" && !state.baselineFile) {
+      return "对比分析需要上传上次基准报告 Excel。";
+    }
     return "";
   }
 
   function buildPayload() {
     const analysisMode = mode();
-    const product = el.productName.value.trim() || "未命名产品";
+    const product = el.productName.value.trim();
     const period = el.analysisPeriod.value.trim();
+    const messageParts = [];
+    if (product) messageParts.push(`产品：${product}`);
+    if (period) messageParts.push(`分析周期：${period}`);
+    messageParts.push(analysisMode === "baseline_compare" ? "与上次基准对比" : "没有历史基准，建立本期分析");
     const files = state.chatFiles.map((file) => ({
       name: file.name,
       size: file.size,
       type: file.type,
       role: "chat_record"
     }));
-    if (state.baselineFile) {
+    const useBaselineFile = analysisMode === "baseline_compare" && baselineMode() === "file";
+    if (useBaselineFile && state.baselineFile) {
       files.push({
         name: state.baselineFile.name,
         size: state.baselineFile.size,
@@ -94,12 +115,20 @@
         role: "baseline"
       });
     }
-    return {
-      user_message: `产品：${product}${period ? `；分析周期：${period}` : ""}；${analysisMode === "baseline_compare" ? "与上次基准对比" : "没有历史基准，建立本期分析"}。`,
+    const payload = {
+      user_message: messageParts.join("；") + "。",
       analysis_type: analysisMode,
       input_mode: analysisMode === "baseline_compare" ? "baseline_and_chat" : "chat_only",
       files
     };
+    if (analysisMode === "baseline_compare" && baselineMode() === "text") {
+      payload.baseline_text = el.baselineText.value.trim();
+      const days = Number(el.baselineDays.value);
+      if (Number.isFinite(days) && days > 0) payload.baseline_days = Math.round(days);
+      const baselinePeriod = el.baselinePeriod.value.trim();
+      if (baselinePeriod) payload.baseline_period = baselinePeriod;
+    }
+    return payload;
   }
 
   function setSubmitting(value) {
@@ -239,6 +268,16 @@
     document.querySelectorAll('input[name="analysisMode"]').forEach((input) => {
       input.addEventListener("change", () => {
         setHidden(el.baselinePanel, mode() !== "baseline_compare");
+        renderFiles();
+        showFormError("");
+      });
+    });
+    document.querySelectorAll('input[name="baselineMode"]').forEach((input) => {
+      input.addEventListener("change", () => {
+        const textMode = baselineMode() === "text";
+        setHidden(el.baselineTextBlock, !textMode);
+        setHidden(el.baselineFileBlock, textMode);
+        renderFiles();
         showFormError("");
       });
     });
@@ -252,6 +291,7 @@
       renderFiles();
       showFormError("");
     });
+    el.baselineText.addEventListener("input", () => showFormError(""));
     el.form.addEventListener("submit", submitAnalysis);
     el.retryTask.addEventListener("click", retryTask);
   }

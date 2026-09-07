@@ -20,7 +20,7 @@
         <div class="section-heading">
           <div>
             <h2 id="analysisTitle">新建分析</h2>
-            <p>分析内容由 GPT 根据本次聊天生成，Excel 只复用正式母版格式。</p>
+            <p>上传聊天记录，全部买家消息逐条分析，完成后生成正式 Excel 报告。</p>
           </div>
         </div>
 
@@ -42,7 +42,7 @@
           <div class="metadata-grid">
             <label>
               <span>产品名称</span>
-              <input id="productName" type="text" value="丹橘卷发棒三款产品" autocomplete="off" />
+              <input id="productName" type="text" placeholder="例如：丹橘卷发棒三款产品" autocomplete="off" />
             </label>
             <label>
               <span>分析周期</span>
@@ -52,18 +52,49 @@
 
           <div class="upload-grid">
             <label class="upload-panel" for="chatFiles">
-              <span class="upload-title">本次聊天记录 <strong>必填</strong></span>
-              <span class="upload-copy">支持多个 .log、.txt 或 .csv 文件</span>
+              <span class="upload-icon" aria-hidden="true">+</span>
+              <span class="upload-title"><span class="step-badge">1</span>本次聊天记录</span>
+              <span class="upload-copy">支持多个 .log、.txt 或 .csv 文件，一个文件一个商品</span>
               <span class="upload-action">选择聊天文件</span>
               <input id="chatFiles" type="file" multiple accept=".csv,.log,.txt" />
             </label>
 
-            <label id="baselinePanel" class="upload-panel hidden" for="baselineFile">
-              <span class="upload-title">上次基准报告 <strong>必填</strong></span>
-              <span class="upload-copy">用于词条和指标对照，不作为输出模板</span>
-              <span class="upload-action">选择基准 Excel</span>
-              <input id="baselineFile" type="file" accept=".xlsx,.xls" />
-            </label>
+            <div id="baselinePanel" class="baseline-panel hidden">
+              <div class="baseline-head">
+                <span class="upload-title"><span class="step-badge">2</span>上次基准 <strong>必填</strong></span>
+                <div class="segmented-control segmented-control--small">
+                  <label>
+                    <input type="radio" name="baselineMode" value="text" checked />
+                    <span>粘贴上期词条</span>
+                  </label>
+                  <label>
+                    <input type="radio" name="baselineMode" value="file" />
+                    <span>上传基准 Excel</span>
+                  </label>
+                </div>
+              </div>
+              <div id="baselineTextBlock">
+                <textarea id="baselineText" rows="8" placeholder="售前&#10;版本与套装配置 56 26.0%&#10;产品功能与效果 55 25.6%&#10;&#10;售后&#10;使用方法/教程 79 34.1% P0 已购后咨询操作、教程、视频"></textarea>
+                <p class="field-hint">可直接从上期报告《售前/售后需求统计》Sheet 复制整行粘贴；每行一条，最少只需词条和人数，排名、占比、优先级、定义会自动识别。</p>
+                <div class="metadata-grid baseline-meta">
+                  <label>
+                    <span>上期天数（选填）</span>
+                    <input id="baselineDays" type="number" min="1" step="1" placeholder="如 7" />
+                  </label>
+                  <label>
+                    <span>上期统计时间（选填）</span>
+                    <input id="baselinePeriod" type="text" placeholder="如 2026-08-12 至 2026-08-18" />
+                  </label>
+                </div>
+              </div>
+              <div id="baselineFileBlock" class="hidden">
+                <label class="upload-panel upload-panel--inner" for="baselineFile">
+                  <span class="upload-copy">沿用上期词条口径，自动对比本期变化；不作为输出模板</span>
+                  <span class="upload-action">选择基准 Excel</span>
+                  <input id="baselineFile" type="file" accept=".xlsx,.xls" />
+                </label>
+              </div>
+            </div>
           </div>
 
           <div id="fileList" class="file-list" aria-live="polite"></div>

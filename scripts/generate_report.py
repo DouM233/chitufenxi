@@ -811,6 +811,199 @@ def read_baseline_data(file_path):
     return empty
 
 
+MANUAL_BASELINE_TOTAL_KEYS = ("正式需求总数", "基准总需求", "需求覆盖买家", "本期总需求")
+
+
+def parse_manual_baseline(text, days=None, period=None):
+    """Parse operator-pasted last-period rows into read_baseline_data's structure.
+
+    Deterministic on purpose: baseline numbers must never be transcribed by the
+    model. Tolerant per-row format: [排名] 词条 人数 [占比] [日均] [优先级] [定义...]；
+    售前/售后标题行分组。Excel 复制的 TSV、多空格、单空格、逗号分隔都接受，
+    最少只需「词条 + 人数」两列。
+    """
+    result = {
+        "售前": {"rows": {}, "total": 0, "days": 0},
+        "售后": {"rows": {}, "total": 0, "days": 0},
+        "context": "",
+        "taxonomy": [],
+        "products": {},
+        "start_date": "",
+        "end_date": "",
+    }
+    full_text = str(text or "")
+    if not full_text.strip():
+        raise RuntimeError("上期基准录入内容为空。请在输入框粘贴售前/售后词条行，或改用上传基准 Excel。")
+
+    parsed_days = 0
+    if days is not None:
+        try:
+            parsed_days = int(days)
+        except (TypeError, ValueError):
+            parsed_days = 0
+        if parsed_days < 0:
+            parsed_days = 0
+    period_match = re.search(
+        r"(\d{4}-\d{2}-\d{2})\s*[至到~～—\-]{1,2}\s*(\d{4}-\d{2}-\d{2})",
+        f"{period or ''}\n{full_text}",
+    )
+    if period_match:
+        result["start_date"], result["end_date"] = period_match.groups()
+        if not parsed_days:
+            parsed_days = (
+                datetime.strptime(result["end_date"], "%Y-%m-%d").date()
+                - datetime.strptime(result["start_date"], "%Y-%m-%d").date()
+            ).days + 1
+
+    def split_tokens(line):
+        # 依次尝试 Tab、多空格/逗号、单空格三种切法，取切出 token 最多的方案，
+        # 避免「开头双空格 + 后续单空格」这类混合格式被提前截断。
+        candidates = (
+            [token.strip() for token in line.split("\t") if token.strip()],
+            [token.strip() for token in re.split(r"\s{2,}|[，,｜|]", line) if token.strip()],
+            line.split(),
+        )
+        best = []
+        for tokens in candidates:
+            if len(tokens) > len(best):
+                best = tokens
+        return best if len(best) >= 2 else []
+
+    def is_number(token):
+        return bool(re.fullmatch(r"\d+(?:,\d{3})*(?:\.\d+)?", token))
+
+    def is_percent(token):
+        return bool(re.fullmatch(r"\d+(?:\.\d+)?%", token))
+
+    current_stage = None
+    row_counts = {"售前": 0, "售后": 0}
+    share_sums = {"售前": 0.0, "售后": 0.0}
+    orphan_lines = []
+
+    for raw_line in full_text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        compact = re.sub(r"[\s【\[\]（）()：:，,。.、_\-]+", "", line)
+        if compact in ("售前", "售后", "售前需求统计", "售后需求统计", "售前V1", "售后V1", "售前需求", "售后需求"):
+            current_stage = "售前" if "售前" in compact else "售后"
+            continue
+        if any(key in line for key in ("统计时间", "统计周期", "分析周期")):
+            continue
+        days_match = re.search(r"统计天数[:：]?\s*(\d+)", line)
+        if days_match:
+            if not parsed_days:
+                parsed_days = int(days_match.group(1))
+            continue
+        if any(key in line for key in MANUAL_BASELINE_TOTAL_KEYS):
+            continue
+        if not re.search(r"\d", line.replace("%", "")):
+            # 表头、说明文字等不含数字的行直接跳过；数据行必须带人数。
+            continue
+
+        tokens = split_tokens(line)
+        if len(tokens) >= 3 and re.fullmatch(r"\d+[.、]?", tokens[0]):
+            tokens = tokens[1:]
+        label_index = None
+        for index, token in enumerate(tokens):
+            if not is_number(token) and not is_percent(token):
+                label_index = index
+                break
+        if label_index is None:
+            continue
+        label = tokens[label_index].strip()
+        if not label or len(label) > 40:
+            continue
+
+        count = None
+        share = 0.0
+        priority = ""
+        definition_tokens = []
+        cursor = label_index + 1
+        while cursor < len(tokens):
+            token = tokens[cursor]
+            if count is None and re.fullmatch(r"\d+(?:,\d{3})*", token):
+                count = int(token.replace(",", ""))
+            elif not share and is_percent(token):
+                share = float(token[:-1]) / 100
+            elif not share and is_number(token) and 0 < float(token) <= 1:
+                share = float(token)
+            elif count is not None and is_number(token):
+                pass  # 日均等后续数字列，不属于定义
+            elif not priority and token.upper() in ("P0", "P1", "P2"):
+                priority = token.upper()
+            else:
+                definition_tokens = tokens[cursor:]
+                break
+            cursor += 1
+        if count is None:
+            continue
+        if current_stage is None:
+            orphan_lines.append(line)
+            continue
+
+        stage_rows = result[current_stage]["rows"]
+        if label in stage_rows:
+            raise RuntimeError(
+                f"上期基准里「{label}」在{current_stage}出现多次，请只保留一行。"
+            )
+        stage_rows[label] = {
+            "count": count,
+            "share": share,
+            "daily": 0,
+            "priority": priority or "P2",
+            "definition": re.sub(r"\s+", " ", " ".join(definition_tokens)).strip()[:300],
+            "action": "",
+        }
+        row_counts[current_stage] += 1
+        if share:
+            share_sums[current_stage] += share
+
+    if orphan_lines:
+        raise RuntimeError(
+            "粘贴内容里有带数字的行缺少「售前/售后」分组标题，无法确定归属："
+            + "；".join(orphan_lines[:3])
+        )
+    if not row_counts["售前"] and not row_counts["售后"]:
+        raise RuntimeError(
+            "没有从录入内容识别出任何「词条 + 人数」行。请每行一条，"
+            "先用「售前」「售后」标题分组，例如：使用方法/教程 79 34.1%"
+        )
+    for stage in ("售前", "售后"):
+        if share_sums[stage] > 1.3:
+            raise RuntimeError(
+                f"{stage}词条占比合计约 {share_sums[stage]:.0%}，超过 130%，"
+                "请检查是否误复制了对比表中本期和基准两列。"
+            )
+        result[stage]["total"] = sum(item["count"] for item in result[stage]["rows"].values())
+        result[stage]["days"] = parsed_days
+        if parsed_days:
+            for item in result[stage]["rows"].values():
+                item["daily"] = item["count"] / parsed_days
+
+    taxonomy_by_label = {}
+    for stage in ("售前", "售后"):
+        for label, row in result[stage]["rows"].items():
+            item = taxonomy_by_label.get(label)
+            if item:
+                if stage not in item["stages"]:
+                    item["stages"].append(stage)
+                continue
+            taxonomy_by_label[label] = {
+                "label": label,
+                "stage": stage,
+                "stages": [stage],
+                "product_prefixes": [],
+                "theme": infer_theme_from_label(label),
+                "definition": row["definition"] or f"{label}相关的明确买家需求。",
+                "priority": row["priority"],
+                "action": row["action"] or "持续观察人数、占比和客服承接消耗。",
+            }
+    result["taxonomy"] = list(taxonomy_by_label.values())
+    result["context"] = json.dumps(result["taxonomy"], ensure_ascii=False)
+    return result
+
+
 def write_rows(sheet, start_row, rows, style_row=None):
     style_row = style_row or start_row
     for offset, row in enumerate(rows):
@@ -1195,6 +1388,14 @@ def write_scope_sheet(workbook, data, results, baseline_data):
         ["上期基准", baseline_period, "有基准时沿用词条、定义、阶段和去重规则，只新增旧词条无法覆盖的需求"],
         ["完整性门禁", f"{data.get('llm_usage', {}).get('analyzed_messages', 0)}/{data.get('llm_usage', {}).get('expected_messages', 0)}", "未完成全部有效消息时禁止发布正式 Excel"],
     ]
+    if str((data.get("manual_baseline") or {}).get("text") or "").strip():
+        rows.append(
+            [
+                "上期基准来源",
+                "手工录入",
+                "仅统计录入的词条与数字；未录入项按无基准处理，定义缺失的词条按本期聊天重新校准",
+            ]
+        )
     write_rows(sheet, 1, rows, 1)
     return sheet.title
 
@@ -1247,11 +1448,21 @@ def write_workbook(data, output_path):
     template_path = TEMPLATE_XLSX
     if not template_path.exists():
         raise FileNotFoundError(f"找不到正式报告母版：{template_path}")
-    baseline_data = read_baseline_data(uploaded_baseline) if uploaded_baseline else read_baseline_data(None)
-    if uploaded_baseline and not baseline_data.get("taxonomy"):
-        raise RuntimeError("上期基准未读取到词条、定义和阶段，完整性门禁已阻止无口径对比。")
-    baseline_metrics = None
+    manual_baseline = data.get("manual_baseline") or {}
+    manual_baseline_text = str(manual_baseline.get("text") or "").strip()
+    baseline_data = read_baseline_data(None)
     if uploaded_baseline:
+        baseline_data = read_baseline_data(uploaded_baseline)
+        if not baseline_data.get("taxonomy"):
+            raise RuntimeError("上期基准未读取到词条、定义和阶段，完整性门禁已阻止无口径对比。")
+    elif manual_baseline_text:
+        baseline_data = parse_manual_baseline(
+            manual_baseline_text,
+            days=manual_baseline.get("days"),
+            period=manual_baseline.get("period"),
+        )
+    baseline_metrics = None
+    if uploaded_baseline or manual_baseline_text:
         baseline_metrics = {
             "period": {
                 "start_date": baseline_data.get("start_date", ""),

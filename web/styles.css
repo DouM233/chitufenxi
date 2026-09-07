@@ -37,7 +37,6 @@ input {
 
 .app-shell {
   width: min(1040px, 100%);
-  min-height: 100vh;
   margin: 0 auto;
   background: var(--panel);
   border-inline: 1px solid var(--line);
@@ -200,6 +199,96 @@ legend,
 .upload-panel:hover {
   border-color: var(--blue);
   background: var(--blue-soft);
+}
+
+.upload-icon {
+  color: #a9b6c9;
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1;
+  margin-bottom: 6px;
+}
+
+.upload-panel:hover .upload-icon {
+  color: var(--blue);
+}
+
+.step-badge {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  margin-right: 6px;
+  border-radius: 999px;
+  background: #edf0f4;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  vertical-align: 2px;
+}
+
+.baseline-panel {
+  align-self: stretch;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 16px 18px;
+  background: #fafbfc;
+}
+
+.baseline-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.segmented-control--small span {
+  min-height: 30px;
+  padding: 0 12px;
+  font-size: 12px;
+}
+
+.baseline-panel textarea {
+  width: 100%;
+  margin-top: 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px 12px;
+  background: #fff;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.7;
+  outline: none;
+  resize: vertical;
+}
+
+.baseline-panel textarea:focus {
+  border-color: var(--blue);
+  box-shadow: 0 0 0 3px rgba(35, 100, 170, 0.12);
+}
+
+.field-hint {
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.baseline-meta {
+  margin-top: 12px;
+}
+
+.baseline-meta label > span {
+  font-size: 12px;
+}
+
+.upload-panel--inner {
+  min-height: 0;
+  margin-top: 12px;
+  padding: 24px 20px;
+  border-style: dashed;
 }
 
 .upload-title {

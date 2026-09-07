@@ -244,7 +244,7 @@ function runPython(scriptPath, args, extraEnv = {}, onProgress = () => {}) {
         CHITU_LLM_TIMEOUT: "240",
         CHITU_LLM_RETRIES: "3",
         CHITU_LLM_MAX_ATTEMPTS: "0",
-        CHITU_LLM_WORKERS: "6",
+        CHITU_LLM_WORKERS: process.env.CHITU_LLM_WORKERS || "12",
         ...extraEnv
       },
       windowsHide: true
@@ -321,7 +321,7 @@ async function runCurlingIronCodexReport(chatFiles, baselineFiles, excelPath, ma
     CHITU_LLM_TIMEOUT: "240",
     CHITU_LLM_RETRIES: "3",
     CHITU_LLM_MAX_ATTEMPTS: "0",
-    CHITU_LLM_WORKERS: "6"
+    CHITU_LLM_WORKERS: process.env.CHITU_LLM_WORKERS || "12"
   };
   const baselineFile = findBaselineWorkbook(baselineFiles);
   if (baselineFile) {
@@ -392,8 +392,18 @@ async function executeAnalysis(payload, files, onProgress = () => {}) {
     role: roleFromPayload(payload, file)
   }));
   const receivedGroups = splitFilesByRole(receivedFiles);
+  const manualBaselineText = String(payload.baseline_text || "").trim();
+  const manualBaseline = manualBaselineText
+    ? {
+        text: manualBaselineText,
+        days: Number(payload.baseline_days) > 0 ? Math.round(Number(payload.baseline_days)) : null,
+        period: String(payload.baseline_period || "").trim()
+      }
+    : null;
   const productName = inferProductName(userMessage, receivedFiles);
-  const analysisType = inferAnalysisType(userMessage, receivedGroups, payload.analysis_type);
+  const analysisType = manualBaselineText
+    ? "baseline_compare"
+    : inferAnalysisType(userMessage, receivedGroups, payload.analysis_type);
 
   if (!receivedGroups.chatFiles.length) {
     throw new Error("请至少上传本次聊天记录文件。若要做基准对照，请同时上传上次分析基准。");
@@ -420,6 +430,9 @@ async function executeAnalysis(payload, files, onProgress = () => {}) {
 
   await writeFile(path.join(uploadDir, "用户文字说明.md"), userMessage || "用户未填写文字说明。", "utf8");
   await writeFile(path.join(uploadDir, "上传文件清单.json"), JSON.stringify(savedFiles, null, 2), "utf8");
+  if (manualBaseline) {
+    await writeFile(path.join(uploadDir, "上期基准_手工录入.txt"), manualBaselineText, "utf8");
+  }
 
   const summary = buildSummary(productName, analysisType, savedFiles, savedFileGroups);
   await writeFile(
@@ -436,7 +449,7 @@ async function executeAnalysis(payload, files, onProgress = () => {}) {
       `- API Key：${runtimeConfig.llmApiKey ? "已配置" : "未配置"}`,
       `- 文件数量：${savedFiles.length}`,
       `- 本次聊天记录：${savedFileGroups.chatFiles.length}`,
-      `- 上次基准：${savedFileGroups.baselineFiles.length}`,
+      `- 上次基准：${savedFileGroups.baselineFiles.length}${manualBaseline ? "（另含手工录入基准）" : ""}`,
       "- 去重口径：同一买家 + 同一阶段 + 同一需求词条 + 当前周期",
       "- P0/质量/安全：需要二次证据复核",
       "- 状态：已按 Codex 正式报告母版生成"
@@ -467,6 +480,7 @@ async function executeAnalysis(payload, files, onProgress = () => {}) {
     user_message: userMessage,
     summary,
     saved_files: savedFiles,
+    manual_baseline: manualBaseline,
     baseline_files: savedFileGroups.baselineFiles,
     chat_files: savedFileGroups.chatFiles,
     reference_files: savedFileGroups.referenceFiles
