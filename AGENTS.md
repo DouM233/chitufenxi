@@ -88,13 +88,17 @@ node local-server.mjs
 `POST /api/tasks`（multipart：`payload` JSON + `files` 二进制）——创建任务
 `GET /api/tasks/{task_id}` —— 轮询状态（内存 miss 自动从对象存储恢复）
 `GET /api/tasks/{task_id}/file/{kind}` —— 产物签名下载地址（kind: excel/markdown/manifest）
-`POST /api/tasks/{task_id}/retry` —— 进程内重试
+`POST /api/tasks/{task_id}/retry` —— 进程内重试（仅终态 failed/cancelled 可重试）
+`POST /api/tasks/{task_id}/cancel` —— 取消分析（queued 直接移出队列；running 会 SIGTERM 终止 Python 子进程并释放并发槽位；终态返回 409）
+`GET /api/tasks/{task_id}/file/{kind}` —— 按需生成产物签名下载地址（kind: excel/markdown/manifest）
 `GET /api/download?path=...` —— 本地产物下载（同实例兜底）
 `GET /api/health` —— 健康检查（含 storage 配置状态）
 
 ## 常见坑与注意事项
 
-- 服务是单进程内存队列 + `storage/jobs` 快照；**进行中任务仍不能跨实例**（Python 子进程与内存队列是实例本地的），但已完成/失败任务的快照与产物已持久化到对象存储，实例回收/重启后任务状态与下载均可恢复；未完成任务重启后标记 `SERVICE_RESTARTED`。
+- 服务是单进程内存队列 + `storage/jobs` 快照；**进行中任务仍不能跨实例**（Python 子进程与内存队列是实例本地的），但已完成/失败/已取消任务的快照与产物已持久化到对象存储，实例回收/重启后任务状态与下载均可恢复；未完成任务重启后标记 `SERVICE_RESTARTED`。
+- 任务状态机：`queued → running → completed | failed | cancelled`。cancelled 是终态并会同步对象存储快照；用户可对 failed/cancelled 任务点"重新分析"（内部走 retry，复用原始上传文件）。
+- **生产部署引入 SDK 依赖后必须执行 `pnpm install`**（.coze 的 build 已配置）：若部署平台跳过依赖安装，服务会因 `ERR_MODULE_NOT_FOUND` 启动失败，表现为整站不可用/上传报错——排查生产"网站打不开/上传失败"时先看部署日志里 pnpm install 是否成功。
 - 多任务并行是安全的：每个任务独立 Python 子进程，上传/过程/结果目录均按 task_id 隔离；LLM 缓存按内容哈希共享。上游限流（429）由 Python 内置指数退避重试兜底。
 - 一个聊天文件 = 一个商品/SKU；多商品必须分文件上传，不能拼接成单文件。
 - 完整性门禁：`expected_messages` 必须等于 `analyzed_messages`，否则拒绝发布 Excel。

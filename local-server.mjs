@@ -45,6 +45,7 @@ const jobsRoot = path.join(stateRoot, "jobs");
 const llmCacheRoot = path.join(stateRoot, "cache", "llm");
 const jobs = new Map();
 const jobQueue = [];
+const activeChildren = new Map();
 const maxActiveJobs = Math.max(1, Number(process.env.CHITU_MAX_ACTIVE_JOBS || 12));
 let activeJobs = 0;
 
@@ -243,7 +244,7 @@ function buildSummary(productName, analysisType, savedFiles, fileGroups) {
   ];
 }
 
-function runPython(scriptPath, args, extraEnv = {}, onProgress = () => {}) {
+function runPython(scriptPath, args, extraEnv = {}, onProgress = () => {}, manageChild = null) {
   return new Promise((resolve, reject) => {
     const child = spawn("python", [scriptPath, ...args], {
       cwd: projectRoot,
@@ -259,6 +260,7 @@ function runPython(scriptPath, args, extraEnv = {}, onProgress = () => {}) {
       },
       windowsHide: true
     });
+    if (manageChild) manageChild(child);
     let stdout = "";
     let stderr = "";
     let stdoutBuffer = "";
@@ -282,6 +284,7 @@ function runPython(scriptPath, args, extraEnv = {}, onProgress = () => {}) {
     });
     child.on("error", reject);
     child.on("close", (code) => {
+      if (manageChild) manageChild(null);
       if (code === 0) resolve(stdout);
       else reject(new Error(stderr || `Python exited with code ${code}`));
     });
@@ -318,7 +321,7 @@ async function copySpecializedOutputs(manifestPath, excelPath, markdownPath, lab
   return manifest;
 }
 
-async function runCurlingIronCodexReport(chatFiles, baselineFiles, excelPath, markdownPath, onProgress) {
+async function runCurlingIronCodexReport(chatFiles, baselineFiles, excelPath, markdownPath, onProgress, manageChild = null) {
   const inputSpec = buildCurlingInputSpec(chatFiles);
   if (!inputSpec) {
     throw new Error("三款卷发棒正式分析需要同时上传五合一、366、856三份聊天记录。");
@@ -341,7 +344,8 @@ async function runCurlingIronCodexReport(chatFiles, baselineFiles, excelPath, ma
     path.join(projectRoot, "scripts", "analyze_curling_irons.py"),
     [],
     env,
-    onProgress
+    onProgress,
+    manageChild
   );
   const manifestPath = await newestManifestIn(
     specializedOutputRoot,
@@ -353,7 +357,7 @@ async function runCurlingIronCodexReport(chatFiles, baselineFiles, excelPath, ma
   return copySpecializedOutputs(manifestPath, excelPath, markdownPath, "三款卷发棒");
 }
 
-async function runXiaoqipao2449CodexReport(chatFiles, baselineFiles, excelPath, markdownPath, onProgress) {
+async function runXiaoqipao2449CodexReport(chatFiles, baselineFiles, excelPath, markdownPath, onProgress, manageChild = null) {
   const chatFile = find2449ChatFile(chatFiles);
   if (!chatFile) {
     throw new Error("2449小气泡正式分析需要上传本期聊天记录 CSV/log/txt。");
@@ -368,7 +372,7 @@ async function runXiaoqipao2449CodexReport(chatFiles, baselineFiles, excelPath, 
   if (baselineFile) {
     env.CHITU_BASELINE_XLSX = baselineFile.path;
   }
-  await runPython(path.join(projectRoot, "scripts", "analyze_2449_new_period.py"), [], env, onProgress);
+  await runPython(path.join(projectRoot, "scripts", "analyze_2449_new_period.py"), [], env, onProgress, manageChild);
   const manifestPath = await newestManifestIn(
     specializedOutputRoot,
     "2449小气泡_20260819-0825"
@@ -504,12 +508,17 @@ async function executeAnalysis(payload, files, onProgress = () => {}) {
   let reportLevel = "formal";
   let responseMessage = "AI分析已完成";
   if (isCurlingIronTask(userMessage, savedFileGroups.chatFiles)) {
+    const manageChild = (child) => {
+      if (child) activeChildren.set(taskId, child);
+      else activeChildren.delete(taskId);
+    };
     specializedManifest = await runCurlingIronCodexReport(
       savedFileGroups.chatFiles,
       savedFileGroups.baselineFiles,
       excelPath,
       markdownPath,
-      onProgress
+      onProgress,
+      manageChild
     );
     analyzerName = "scripts/analyze_curling_irons.py";
     finalSummary = Array.isArray(specializedManifest.summary) ? specializedManifest.summary : summary;
@@ -518,7 +527,11 @@ async function executeAnalysis(payload, files, onProgress = () => {}) {
       path.join(projectRoot, "scripts", "generate_report.py"),
       [reportDataPath, excelPath],
       { CHITU_LLM_CACHE_DIR: llmCacheRoot },
-      onProgress
+      onProgress,
+      (child) => {
+        if (child) activeChildren.set(taskId, child);
+        else activeChildren.delete(taskId);
+      }
     );
     const analyzedReportData = JSON.parse(await readFile(reportDataPath, "utf8"));
     finalSummary = Array.isArray(analyzedReportData.summary) ? analyzedReportData.summary : summary;
@@ -683,7 +696,7 @@ async function persistJob(job) {
       const temporary = `${target}.${randomUUID()}.tmp`;
       await writeFile(temporary, snapshot, "utf8");
       await rename(temporary, target);
-      if (job.status === "completed" || job.status === "failed") {
+      if (job.status === "completed" || job.status === "failed" || job.status === "cancelled") {
         await syncSnapshotToRemote(job);
       }
     });
@@ -751,14 +764,18 @@ async function runJob(job) {
       error: null
     });
   } catch (error) {
-    const normalized = normalizeJobError(error);
-    console.error(`任务 ${job.task_id} 分析失败：`, normalized);
-    await updateJob(job, {
-      status: "failed",
-      stage: job.stage || "analysis",
-      message: "本次分析没有完成",
-      error: normalized
-    });
+    if (job.status === "cancelled") {
+      console.log(`任务 ${job.task_id} 已被用户取消，跳过失败标记`);
+    } else {
+      const normalized = normalizeJobError(error);
+      console.error(`任务 ${job.task_id} 分析失败：`, normalized);
+      await updateJob(job, {
+        status: "failed",
+        stage: job.stage || "analysis",
+        message: "本次分析没有完成",
+        error: normalized
+      });
+    }
   } finally {
     activeJobs -= 1;
     setImmediate(() => void drainJobQueue());
@@ -822,7 +839,7 @@ async function handleRetryJob(req, res) {
   const parts = url.pathname.split("/").filter(Boolean);
   const taskId = decodeURIComponent(parts[parts.length - 2] || "");
   const job = findJob(taskId);
-  if (!job || job.status !== "failed" || !job._files?.length) {
+  if (!job || (job.status !== "failed" && job.status !== "cancelled") || !job._files?.length) {
     sendJson(res, 409, { status: "failed", message: "该任务当前不能重试。" });
     return;
   }
@@ -837,6 +854,57 @@ async function handleRetryJob(req, res) {
   jobQueue.push(job);
   setImmediate(() => void drainJobQueue());
   sendJson(res, 202, publicJob(job));
+}
+
+async function handleCancelJob(req, res) {
+  const url = new URL(req.url || "/", `http://127.0.0.1:${port}`);
+  const parts = url.pathname.split("/").filter(Boolean);
+  const taskId = decodeURIComponent(parts[parts.length - 2] || "");
+  const job = findJob(taskId);
+  if (!job) {
+    sendJson(res, 404, { status: "failed", message: "找不到该分析任务，可能已过期。" });
+    return;
+  }
+  if (job.status === "cancelled") {
+    sendJson(res, 200, publicJob(job));
+    return;
+  }
+  if (job.status === "queued") {
+    const queueIndex = jobQueue.indexOf(job);
+    if (queueIndex >= 0) jobQueue.splice(queueIndex, 1);
+    await updateJob(job, {
+      status: "cancelled",
+      stage: "cancelled",
+      progress: 0,
+      message: "任务已取消",
+      error: { code: "CANCELLED", message: "用户在任务开始前取消了分析。", retryable: false }
+    });
+    sendJson(res, 200, publicJob(job));
+    return;
+  }
+  if (job.status === "running") {
+    const child = activeChildren.get(taskId);
+    await updateJob(job, {
+      status: "cancelled",
+      stage: "cancelled",
+      message: "任务已取消",
+      error: { code: "CANCELLED", message: "用户取消了本次分析。", retryable: false }
+    });
+    if (child) {
+      try {
+        child.kill("SIGTERM");
+        setTimeout(() => {
+          try {
+            if (!child.killed) child.kill("SIGKILL");
+          } catch {}
+        }, 3000).unref?.();
+      } catch {}
+      activeChildren.delete(taskId);
+    }
+    sendJson(res, 202, publicJob(job));
+    return;
+  }
+  sendJson(res, 409, { status: job.status, message: "任务已结束，无法取消。" });
 }
 
 function reviveSavedJob(saved) {
@@ -885,7 +953,7 @@ async function loadPersistedJobs() {
       }
     }
     for (const job of jobs.values()) {
-      if ((job.status === "completed" || job.status === "failed") && !job._remoteSynced) {
+      if ((job.status === "completed" || job.status === "failed" || job.status === "cancelled") && !job._remoteSynced) {
         void syncSnapshotToRemote(job).catch(() => {});
       }
     }
@@ -1002,6 +1070,10 @@ createServer(async (req, res) => {
     }
     if (req.method === "POST" && /^\/api\/tasks\/[^/]+\/retry$/.test(pathname)) {
       await handleRetryJob(req, res);
+      return;
+    }
+    if (req.method === "POST" && /^\/api\/tasks\/[^/]+\/cancel$/.test(pathname)) {
+      await handleCancelJob(req, res);
       return;
     }
     if (req.method === "GET" && /^\/api\/tasks\/[^/]+$/.test(pathname)) {

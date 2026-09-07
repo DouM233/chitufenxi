@@ -9,7 +9,7 @@ importers:
   .:
     dependencies:
       coze-coding-dev-sdk:
-        specifier: ^0.7.30
+        specifier: 0.7.30
         version: 0.7.30(openai@7.10.0(ws@8.21.3)(zod@4.5.4))(ws@8.21.3)
 
 packages:

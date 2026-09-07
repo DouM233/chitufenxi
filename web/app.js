@@ -6,7 +6,8 @@
     baselineFile: null,
     taskId: null,
     pollTimer: null,
-    submitting: false
+    submitting: false,
+    cancelling: false
   };
 
   const el = {
@@ -31,6 +32,8 @@
     taskProgressText: document.querySelector("#taskProgressText"),
     progressBar: document.querySelector("#progressBar"),
     chunkProgress: document.querySelector("#chunkProgress"),
+    cancelArea: document.querySelector("#cancelArea"),
+    cancelTask: document.querySelector("#cancelTask"),
     taskError: document.querySelector("#taskError"),
     technicalDetails: document.querySelector("#technicalDetails"),
     technicalError: document.querySelector("#technicalError"),
@@ -142,7 +145,8 @@
       queued: "排队中",
       running: "分析中",
       completed: "已完成",
-      failed: "未完成"
+      failed: "未完成",
+      cancelled: "已取消"
     }[status] || status;
   }
 
@@ -158,9 +162,16 @@
       ? `语义分析批次：${job.completed_chunks || 0}/${job.total_chunks}`
       : "";
 
-    const failed = job.status === "failed";
+    const failed = job.status === "failed" || job.status === "cancelled";
+    const canRetry = job.status === "failed" || job.status === "cancelled";
+    const active = job.status === "queued" || job.status === "running";
     setHidden(el.taskError, !failed);
-    setHidden(el.taskActions, !failed);
+    setHidden(el.taskActions, !canRetry);
+    setHidden(el.cancelArea, !active || Boolean(state.cancelling));
+    if (!active) {
+      el.cancelTask.disabled = false;
+      el.cancelTask.textContent = "取消分析";
+    }
     el.taskError.textContent = failed ? job.error?.message || "本次分析没有完成。" : "";
     const detail = job.error?.detail || "";
     setHidden(el.technicalDetails, !detail);
@@ -238,9 +249,10 @@
         state.pollTimer = null;
         localStorage.removeItem("chitu_active_task");
         renderResult(job.result);
-      } else if (job.status === "failed") {
+      } else if (job.status === "failed" || job.status === "cancelled") {
         clearInterval(state.pollTimer);
         state.pollTimer = null;
+        localStorage.removeItem("chitu_active_task");
       }
     } catch (error) {
       el.taskMessage.textContent = `暂时无法读取任务状态：${error.message}`;
@@ -297,6 +309,25 @@
     }
   }
 
+  async function cancelTask() {
+    if (!state.taskId || state.cancelling) return;
+    if (!window.confirm("确定要取消本次分析吗？取消后需要重新提交。")) return;
+    state.cancelling = true;
+    el.cancelTask.disabled = true;
+    el.cancelTask.textContent = "正在取消…";
+    try {
+      await getJson(`/api/tasks/${encodeURIComponent(state.taskId)}/cancel`, { method: "POST" });
+      setHidden(el.cancelArea, true);
+      void pollTask();
+    } catch (error) {
+      el.taskMessage.textContent = `取消失败：${error.message}`;
+    } finally {
+      state.cancelling = false;
+      el.cancelTask.disabled = false;
+      el.cancelTask.textContent = "取消分析";
+    }
+  }
+
   async function checkService() {
     try {
       await getJson(service.healthUrl || "/api/health");
@@ -338,6 +369,7 @@
     el.baselineText.addEventListener("input", () => showFormError(""));
     el.form.addEventListener("submit", submitAnalysis);
     el.retryTask.addEventListener("click", retryTask);
+    el.cancelTask.addEventListener("click", cancelTask);
   }
 
   function boot() {
