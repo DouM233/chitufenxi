@@ -1,0 +1,10 @@
+{
+  "name": "chitu-chat-analysis-workbench",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "赤兔客服聊天分析工作台：把客服聊天记录转化为正式需求分析报告（Excel）的本地网页应用",
+  "dependencies": {
+    "coze-coding-dev-sdk": "0.7.30"
+  }
+}

@@ -72,19 +72,29 @@ node local-server.mjs
 | `CHITU_ANALYSIS_MODEL` | `gpt-5.6-sol` | 模型标识 |
 | `CHITU_LLM_REASONING_EFFORT` | `low` | 推理模型思考档位（`none/low/medium/high/xhigh/max`，留空则不传该参数）。结构化分类任务用 `low` 即可，实测单批耗时约为默认档的 1/2~1/4；追求更快可试 `none`，追求更细分析用 `medium`。缓存键不含此参数，改档位后旧缓存仍可复用 |
 | `CHITU_MAX_ACTIVE_JOBS` | `12` | 并发分析任务数；超过并发的任务才进入队列排队（可调大以减少排队；注意每个任务是独立 Python 子进程，内存峰值 ≈ 任务数 × 约 100MB） |
-| `CHITU_LLM_WORKERS` | `12`（Node 服务注入；Python 直跑默认 `8`） | 单个任务内分类/风险复核并发线程数（LLM 总并发 ≈ 活跃任务数 × 此值）。实测上游 12 并发不限流；多人同时分析时可适当下调，单人使用可上调到 16~24 |
+| `CHITU_LLM_WORKERS` | `3` | 单个任务内分类/风险复核并发线程数（LLM 总并发 ≈ 活跃任务数 × 此值）。上游限流（429）由 Python 内置指数退避重试兜底 |
+| `COZE_BUCKET_ENDPOINT_URL` / `COZE_BUCKET_NAME` | 沙箱预置 | S3 兼容对象存储端点与桶名（**生产部署必配**，需在平台环境变量配置；两者缺一则对象存储禁用，自动降级本地行为） |
+| `CHITU_S3_ACCESS_KEY_ID` / `CHITU_S3_SECRET_ACCESS_KEY` / `CHITU_S3_REGION` / `CHITU_S3_ENDPOINT` / `CHITU_S3_BUCKET` | — | 自建 S3 兼容存储的凭证与端点（配合 SDK 使用；region 默认 `cn-beijing`）。沙箱走 `COZE_BUCKET_*` 预置集成，无需配置 |
+
+## 对象存储（object-storage.mjs）
+
+- 产物（Excel/Markdown/manifest）与任务终态快照会同步上传对象存储；key 分别为 `chitu/reports/{task_id}/...`、`chitu/jobs/{task_id}.json`（SDK 会在文件名上追加 UUID 前缀，中文自动转 ASCII）。
+- 下载三通道：data URL 内嵌（随任务结果返回，浏览器内存下载）→ `GET /api/tasks/{id}/file/{excel|markdown|manifest}` 动态生成签名 URL（前端 fetch+blob）→ 本地路径 `/api/download?path=...`（同实例兜底）。
+- 任务查询内存 miss 时自动从对象存储按需恢复快照；服务启动时也会全量合并远端快照（本地优先，远端补缺）。
+- 未配置对象存储时全部自动降级：不上传、不生成签名 URL，现有本地/内嵌下载行为完全不变。
 
 ## 数据请求接口
 
 `POST /api/tasks`（multipart：`payload` JSON + `files` 二进制）——创建任务
-`GET /api/tasks/{task_id}` —— 轮询状态
+`GET /api/tasks/{task_id}` —— 轮询状态（内存 miss 自动从对象存储恢复）
+`GET /api/tasks/{task_id}/file/{kind}` —— 产物签名下载地址（kind: excel/markdown/manifest）
 `POST /api/tasks/{task_id}/retry` —— 进程内重试
-`GET /api/download?path=...` —— 下载产物
-`GET /api/health` —— 健康检查
+`GET /api/download?path=...` —— 本地产物下载（同实例兜底）
+`GET /api/health` —— 健康检查（含 storage 配置状态）
 
 ## 常见坑与注意事项
 
-- 服务是单进程内存队列 + `storage/jobs` 快照；**不能多实例部署**，重启后未完成任务不可原地重试（`SERVICE_RESTARTED`）。
+- 服务是单进程内存队列 + `storage/jobs` 快照；**进行中任务仍不能跨实例**（Python 子进程与内存队列是实例本地的），但已完成/失败任务的快照与产物已持久化到对象存储，实例回收/重启后任务状态与下载均可恢复；未完成任务重启后标记 `SERVICE_RESTARTED`。
 - 多任务并行是安全的：每个任务独立 Python 子进程，上传/过程/结果目录均按 task_id 隔离；LLM 缓存按内容哈希共享。上游限流（429）由 Python 内置指数退避重试兜底。
 - 一个聊天文件 = 一个商品/SKU；多商品必须分文件上传，不能拼接成单文件。
 - 完整性门禁：`expected_messages` 必须等于 `analyzed_messages`，否则拒绝发布 Excel。

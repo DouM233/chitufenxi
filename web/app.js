@@ -167,23 +167,57 @@
     el.technicalError.textContent = detail;
   }
 
-  function applyDownload(anchor, dataUrl, serverUrl, filename) {
+  async function downloadViaBlob(url, filename) {
+    // 跨域签名 URL 的 download 属性会被浏览器忽略，必须 fetch + blob 落内存后触发下载
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`下载失败（服务返回 ${response.status}）`);
+    const blob = await response.blob();
+    const blobUrl = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = blobUrl;
+    if (filename) link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 4000);
+  }
+
+  function bindDownload(anchor, dataUrl, objectFileUrl, serverUrl, filename) {
+    anchor.onclick = null;
+    anchor.removeAttribute("download");
+    anchor.href = serverUrl || "#";
     if (dataUrl) {
       anchor.href = dataUrl;
       if (filename) anchor.setAttribute("download", filename);
       return;
     }
-    anchor.removeAttribute("download");
-    anchor.href = serverUrl || "#";
+    if (!objectFileUrl) return;
+    anchor.onclick = (event) => {
+      event.preventDefault();
+      if (anchor.dataset.downloading === "1") return;
+      anchor.dataset.downloading = "1";
+      const originalText = anchor.textContent;
+      anchor.textContent = "正在准备下载…";
+      downloadViaBlob(objectFileUrl, filename)
+        .catch((error) => {
+          console.error("对象存储下载失败，回退服务端路径：", error);
+          window.location.href = serverUrl || objectFileUrl;
+        })
+        .finally(() => {
+          anchor.dataset.downloading = "0";
+          anchor.textContent = originalText;
+        });
+    };
   }
 
   function renderResult(result) {
     const files = result?.files || {};
     const summary = Array.isArray(result?.summary) ? result.summary : [];
     el.resultSummary.textContent = summary[0] || "可以下载查看完整结果。";
-    applyDownload(el.downloadExcel, files.excel_data_url, files.excel_download_url, files.excel_filename);
-    applyDownload(el.downloadMarkdown, files.markdown_data_url, files.markdown_download_url, files.markdown_filename);
-    applyDownload(el.downloadManifest, files.manifest_data_url, files.manifest_download_url, files.manifest_filename);
+    const taskId = state.taskId;
+    bindDownload(el.downloadExcel, files.excel_data_url, `/api/tasks/${taskId}/file/excel`, files.excel_download_url, files.excel_filename);
+    bindDownload(el.downloadMarkdown, files.markdown_data_url, `/api/tasks/${taskId}/file/markdown`, files.markdown_download_url, files.markdown_filename);
+    bindDownload(el.downloadManifest, files.manifest_data_url, `/api/tasks/${taskId}/file/manifest`, files.manifest_download_url, files.manifest_filename);
     setHidden(el.resultPanel, false);
   }
 

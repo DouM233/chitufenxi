@@ -7,6 +7,16 @@ import { Readable } from "node:stream";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
+import {
+  storageEnabled,
+  storageInfo,
+  JOB_SNAPSHOT_PREFIX,
+  REPORT_PREFIX,
+  putObject,
+  presignGetUrl,
+  readObject,
+  listKeys
+} from "./object-storage.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const projectRoot = path.dirname(__filename);
@@ -601,6 +611,29 @@ async function executeAnalysis(payload, files, onProgress = () => {}) {
     filesResult.excel_data_url = `data:${mimeTypes[".xlsx"]};base64,${excelBytes.toString("base64")}`;
     filesResult.markdown_data_url = `data:text/markdown;charset=utf-8;base64,${markdownBytes.toString("base64")}`;
     filesResult.manifest_data_url = `data:application/json;charset=utf-8;base64,${manifestBytes.toString("base64")}`;
+    if (storageEnabled) {
+      const uploadedExcel = await putObject(
+        `${REPORT_PREFIX}${taskId}/${filesResult.excel_filename}`,
+        excelBytes,
+        mimeTypes[".xlsx"]
+      );
+      const uploadedMarkdown = await putObject(
+        `${REPORT_PREFIX}${taskId}/${filesResult.markdown_filename}`,
+        markdownBytes,
+        "text/markdown; charset=utf-8"
+      );
+      const uploadedManifest = await putObject(
+        `${REPORT_PREFIX}${taskId}/${filesResult.manifest_filename}`,
+        manifestBytes,
+        "application/json"
+      );
+      if (uploadedExcel) filesResult.excel_file_key = uploadedExcel;
+      if (uploadedMarkdown) filesResult.markdown_file_key = uploadedMarkdown;
+      if (uploadedManifest) filesResult.manifest_file_key = uploadedManifest;
+      if (!uploadedExcel) {
+        console.error(`任务 ${taskId} 产物上传对象存储失败，保留内嵌与服务端下载通道`);
+      }
+    }
   } catch (error) {
     console.error(`任务 ${taskId} 产物内嵌失败，下载退回服务端路径：`, error?.message || error);
   }
@@ -631,6 +664,15 @@ function publicJob(job) {
   };
 }
 
+async function syncSnapshotToRemote(job) {
+  if (!storageEnabled) return false;
+  const key = `${JOB_SNAPSHOT_PREFIX}${safeSegment(job.task_id)}.json`;
+  const buffer = Buffer.from(JSON.stringify(publicJob(job), null, 2), "utf8");
+  const stored = await putObject(key, buffer, "application/json");
+  if (stored) job._remoteSynced = true;
+  return Boolean(stored);
+}
+
 async function persistJob(job) {
   await mkdir(jobsRoot, { recursive: true });
   const target = path.join(jobsRoot, `${safeSegment(job.task_id)}.json`);
@@ -641,6 +683,9 @@ async function persistJob(job) {
       const temporary = `${target}.${randomUUID()}.tmp`;
       await writeFile(temporary, snapshot, "utf8");
       await rename(temporary, target);
+      if (job.status === "completed" || job.status === "failed") {
+        await syncSnapshotToRemote(job);
+      }
     });
   return job._persistChain;
 }
@@ -794,29 +839,92 @@ async function handleRetryJob(req, res) {
   sendJson(res, 202, publicJob(job));
 }
 
+function reviveSavedJob(saved) {
+  if (!saved || !saved.task_id) return null;
+  if (saved.status === "running" || saved.status === "queued") {
+    saved.status = "failed";
+    saved.message = "服务重启后任务已中止";
+    saved.error = {
+      code: "SERVICE_RESTARTED",
+      message: "服务重启中断了任务，请重新上传文件后分析。",
+      retryable: false,
+      detail: ""
+    };
+  }
+  return saved;
+}
+
 async function loadPersistedJobs() {
   await mkdir(jobsRoot, { recursive: true });
   const entries = await readdir(jobsRoot, { withFileTypes: true });
   for (const entry of entries) {
     if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
     try {
-      const saved = JSON.parse(await readFile(path.join(jobsRoot, entry.name), "utf8"));
-      if (!saved.task_id) continue;
-      if (saved.status === "running" || saved.status === "queued") {
-        saved.status = "failed";
-        saved.message = "服务重启后任务已中止";
-        saved.error = {
-          code: "SERVICE_RESTARTED",
-          message: "服务重启中断了任务，请重新上传文件后分析。",
-          retryable: false,
-          detail: ""
-        };
-      }
+      const saved = reviveSavedJob(JSON.parse(await readFile(path.join(jobsRoot, entry.name), "utf8")));
+      if (!saved) continue;
       jobs.set(saved.task_id, { ...saved, _payload: null, _files: null });
     } catch (error) {
       console.error(`无法恢复任务状态 ${entry.name}：`, error);
     }
   }
+  if (!storageEnabled) return;
+  try {
+    const remoteKeys = await listKeys(JOB_SNAPSHOT_PREFIX, 1000);
+    for (const key of remoteKeys) {
+      const taskId = (key.split("/").pop() || "").replace(/\.json$/i, "");
+      if (!taskId || jobs.has(taskId)) continue;
+      try {
+        const raw = await readObject(key);
+        if (!raw) continue;
+        const saved = reviveSavedJob(JSON.parse(raw.toString("utf8")));
+        if (!saved) continue;
+        jobs.set(saved.task_id, { ...saved, _payload: null, _files: null });
+        console.log(`已从对象存储恢复任务快照 ${saved.task_id}`);
+      } catch (error) {
+        console.error(`远端任务快照恢复失败 ${key}：`, error?.message || error);
+      }
+    }
+    for (const job of jobs.values()) {
+      if ((job.status === "completed" || job.status === "failed") && !job._remoteSynced) {
+        void syncSnapshotToRemote(job).catch(() => {});
+      }
+    }
+  } catch (error) {
+    console.error("对象存储任务快照合并失败：", error?.message || error);
+  }
+}
+
+async function restoreJobFromRemote(taskId) {
+  if (!storageEnabled || jobs.has(taskId)) return jobs.get(taskId) || null;
+  const raw = await readObject(`${JOB_SNAPSHOT_PREFIX}${safeSegment(taskId)}.json`);
+  if (!raw) return null;
+  try {
+    const saved = reviveSavedJob(JSON.parse(raw.toString("utf8")));
+    if (!saved || saved.task_id !== taskId) return null;
+    const job = { ...saved, _payload: null, _files: null };
+    jobs.set(taskId, job);
+    console.log(`按需从对象存储恢复任务快照 ${taskId}`);
+    return job;
+  } catch (error) {
+    console.error(`任务快照按需恢复失败 ${taskId}：`, error?.message || error);
+    return null;
+  }
+}
+
+async function handleObjectFile(req, res, taskId, kind) {
+  const job = jobs.get(taskId) || (await restoreJobFromRemote(taskId));
+  const files = (job && job.result && job.result.files) || {};
+  const key = files[`${kind}_file_key`];
+  if (!key) {
+    sendText(res, 404, "File not found");
+    return;
+  }
+  const url = await presignGetUrl(key);
+  if (!url) {
+    sendText(res, 502, "Object storage unavailable");
+    return;
+  }
+  sendJson(res, 200, { url, filename: files[`${kind}_filename`] || `${taskId}.${kind}` });
 }
 
 async function handleDownload(req, res) {
@@ -883,7 +991,8 @@ createServer(async (req, res) => {
         status: "ok",
         active_jobs: activeJobs,
         queued_jobs: jobQueue.length,
-        max_active_jobs: maxActiveJobs
+        max_active_jobs: maxActiveJobs,
+        storage: storageInfo()
       });
       return;
     }
@@ -897,6 +1006,11 @@ createServer(async (req, res) => {
     }
     if (req.method === "GET" && /^\/api\/tasks\/[^/]+$/.test(pathname)) {
       await handleTaskStatus(req, res);
+      return;
+    }
+    if (req.method === "GET" && /^\/api\/tasks\/[^/]+\/file\/(excel|markdown|manifest)$/.test(pathname)) {
+      const match = pathname.match(/^\/api\/tasks\/([^/]+)\/file\/(excel|markdown|manifest)$/);
+      await handleObjectFile(req, res, decodeURIComponent(match[1]), match[2]);
       return;
     }
     if (req.method === "GET" && pathname === "/api/download") {
