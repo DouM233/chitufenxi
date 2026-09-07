@@ -92,6 +92,12 @@
     if (mode() === "baseline_compare" && baselineMode() === "file" && !state.baselineFile) {
       return "对比分析需要上传上次基准报告 Excel。";
     }
+    const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
+    const oversized = [...state.chatFiles, ...(state.baselineFile ? [state.baselineFile] : [])]
+      .find((f) => f && f.size > MAX_UPLOAD_BYTES);
+    if (oversized) {
+      return `文件「${oversized.name}」约 ${Math.ceil(oversized.size / 1024 / 1024)}MB，超过单次上传上限（25MB），请删减或拆分聊天记录后重试。`;
+    }
     return "";
   }
 
@@ -235,7 +241,15 @@
   async function getJson(url, options) {
     const response = await fetch(url, options);
     const body = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(body.message || `服务返回 ${response.status}`);
+    if (!response.ok) {
+      if (response.status === 413) {
+        throw new Error("文件过大，超过平台上传大小限制，请删减或拆分聊天记录文件后重试");
+      }
+      if (response.status === 502 || response.status === 503 || response.status === 504) {
+        throw new Error("服务正在启动或暂时不可用，请等待几秒后重试");
+      }
+      throw new Error(body.message || `服务返回 ${response.status}`);
+    }
     return body;
   }
 
@@ -243,6 +257,7 @@
     if (!state.taskId) return;
     try {
       const job = await getJson(`/api/tasks/${encodeURIComponent(state.taskId)}`);
+      state.pollMisses = 0;
       renderTask(job);
       if (job.status === "completed") {
         clearInterval(state.pollTimer);
@@ -255,6 +270,19 @@
         localStorage.removeItem("chitu_active_task");
       }
     } catch (error) {
+      state.pollMisses = (state.pollMisses || 0) + 1;
+      const notFound = typeof error.message === "string" && error.message.includes("找不到");
+      if (notFound && state.pollMisses <= 12) {
+        el.taskMessage.textContent = "任务状态同步中（服务实例切换），请稍候…";
+        return;
+      }
+      if (notFound) {
+        clearInterval(state.pollTimer);
+        state.pollTimer = null;
+        localStorage.removeItem("chitu_active_task");
+        el.taskMessage.textContent = "任务状态已失效（服务实例已切换且分析尚未完成），请重新上传分析。";
+        return;
+      }
       el.taskMessage.textContent = `暂时无法读取任务状态：${error.message}`;
     }
   }

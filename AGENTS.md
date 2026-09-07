@@ -105,7 +105,9 @@ node local-server.mjs
 - Excel 样式只来自 `templates/excel/` 母版；基准文件只提供数据，不是样式来源。
 - API Key 严禁写入 `web/`、`window.CHITU_CONFIG`、日志或接口响应。
 - 生产环境（`COZE_PROJECT_ENV=PROD` 或 `NODE_ENV=production`）下，运行时状态（`CHITU_STATE_ROOT`）与历史归档（`CHITU_HISTORY_ROOT`）默认都落在 `/tmp`（`/tmp/chitu-state`、`/tmp/chitu-history`）；`/tmp` 是临时目录且可能被清理，长期归档需接对象存储或持久卷。
-- 产物下载双通道：任务完成时 Excel/Markdown/manifest 会内嵌为 data URL 随任务结果返回并写入任务快照（`result.files.*_data_url`），前端优先用 data URL 下载（浏览器内存完成，不受服务实例回收/`/tmp` 清理影响）；`*_download_url` 服务端路径下载仅作同实例回退。
+- 产物下载双通道：任务完成时 Excel/Markdown/manifest 会内嵌为 data URL 随任务结果返回并写入任务快照（`result.files.*_data_url`），前端优先用 data URL 下载（浏览器内存完成，不受服务实例回收/`/tmp` 清理影响）；签名 URL 下载走 `GET /api/tasks/{id}/file/{kind}` 按需生成；`*_download_url` 服务端路径下载仅作同实例回退。
+- **启动懒恢复**：`loadPersistedJobs` 只加载本地快照，不再启动时全量拉取对象存储（避免冷启动慢导致网关 502）；远端快照由 `getJob`/`restoreJobFromRemote` 在内存 miss 时按需恢复（带内存缓存）。
+- **上传大小限制**：平台网关对请求体有限制（约 32MB，超限返回 413，请求不会到达服务）；前端在 `validate()` 做 25MB 预检（`MAX_UPLOAD_BYTES`）直接拦截并提示；413/502/503 在前端有针对性文案（502 通常是实例冷启动，等几秒重试）。
 
 ## 修复定位
 

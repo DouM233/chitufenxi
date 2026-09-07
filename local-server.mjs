@@ -935,30 +935,13 @@ async function loadPersistedJobs() {
       console.error(`无法恢复任务状态 ${entry.name}：`, error);
     }
   }
+  // 注意：不再在启动时全量拉取远端快照（避免冷启动变慢导致网关 502）。
+  // 远端任务由 handleTaskStatus / handleObjectFile 按需调用 restoreJobFromRemote 恢复并缓存。
   if (!storageEnabled) return;
-  try {
-    const remoteKeys = await listKeys(JOB_SNAPSHOT_PREFIX, 1000);
-    for (const key of remoteKeys) {
-      const taskId = (key.split("/").pop() || "").replace(/\.json$/i, "");
-      if (!taskId || jobs.has(taskId)) continue;
-      try {
-        const raw = await readObject(key);
-        if (!raw) continue;
-        const saved = reviveSavedJob(JSON.parse(raw.toString("utf8")));
-        if (!saved) continue;
-        jobs.set(saved.task_id, { ...saved, _payload: null, _files: null });
-        console.log(`已从对象存储恢复任务快照 ${saved.task_id}`);
-      } catch (error) {
-        console.error(`远端任务快照恢复失败 ${key}：`, error?.message || error);
-      }
+  for (const job of jobs.values()) {
+    if ((job.status === "completed" || job.status === "failed" || job.status === "cancelled") && !job._remoteSynced) {
+      void syncSnapshotToRemote(job).catch(() => {});
     }
-    for (const job of jobs.values()) {
-      if ((job.status === "completed" || job.status === "failed" || job.status === "cancelled") && !job._remoteSynced) {
-        void syncSnapshotToRemote(job).catch(() => {});
-      }
-    }
-  } catch (error) {
-    console.error("对象存储任务快照合并失败：", error?.message || error);
   }
 }
 
