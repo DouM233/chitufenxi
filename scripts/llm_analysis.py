@@ -65,6 +65,9 @@ class OpenAICompatibleClient:
         self.base_url = (os.environ.get("CHITU_LLM_API_BASE") or os.environ.get("OPENAI_BASE_URL") or "").rstrip("/")
         self.api_key = os.environ.get("CHITU_LLM_API_KEY") or os.environ.get("OPENAI_API_KEY") or ""
         self.model = os.environ.get("CHITU_ANALYSIS_MODEL") or "gpt-5.6-sol"
+        # 推理模型默认档位思考 token 多、延迟高；分类/二审等结构化任务用低档即可，
+        # 可通过 CHITU_LLM_REASONING_EFFORT 覆盖（none/low/medium/high/xhigh/max，留空则不传）。
+        self.reasoning_effort = (os.environ.get("CHITU_LLM_REASONING_EFFORT") or "low").strip().lower() or None
         self.timeout = int(os.environ.get("CHITU_LLM_TIMEOUT", "75"))
         self.retries = max(1, int(os.environ.get("CHITU_LLM_RETRIES", "3")))
         self.calls = 0
@@ -100,8 +103,14 @@ class OpenAICompatibleClient:
             "max_tokens": max_tokens,
         }
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        # 缓存键不包含 reasoning_effort：同一提示词的历史缓存（含更高思考档位的结果）仍然有效。
         cache_key = hashlib.sha256(self.endpoint.encode("utf-8") + b"\0" + body).hexdigest()
-        return self.cache_dir / f"{cache_key}.json", payload, body
+        request_body = body
+        if self.reasoning_effort:
+            enriched = dict(payload)
+            enriched["reasoning_effort"] = self.reasoning_effort
+            request_body = json.dumps(enriched, ensure_ascii=False).encode("utf-8")
+        return self.cache_dir / f"{cache_key}.json", payload, request_body
 
     def has_cached(self, system_prompt, user_prompt, max_tokens):
         cache_path, _, _ = self.cache_path_for(system_prompt, user_prompt, max_tokens)
@@ -709,7 +718,7 @@ def classify_chunks(client, messages, taxonomy):
                     client.invalidate_cache(system_prompt, user_prompt, token_limit)
 
     chunks = build_chunks(messages)
-    configured_workers = max(1, int(os.environ.get("CHITU_LLM_WORKERS", "3")))
+    configured_workers = max(1, int(os.environ.get("CHITU_LLM_WORKERS", "8")))
     worker_count = min(configured_workers, len(chunks))
     emit_progress(
         "classifying",
@@ -1022,7 +1031,7 @@ def review_risk_candidates(client, messages, risk_map, review_map):
             return complete_review_leaf(chunk, prompt, token_limit)
 
     confirmed = defaultdict(list)
-    configured_workers = max(1, int(os.environ.get("CHITU_LLM_WORKERS", "3")))
+    configured_workers = max(1, int(os.environ.get("CHITU_LLM_WORKERS", "8")))
     with ThreadPoolExecutor(max_workers=min(configured_workers, len(chunks))) as executor:
         futures = {executor.submit(review_chunk, chunk): chunk for chunk in chunks}
         for future in as_completed(futures):

@@ -101,3 +101,5 @@ logs/
 
 # CodeGraph index
 .codegraph
+# E2E 测试产物
+/storage/e2e_test/

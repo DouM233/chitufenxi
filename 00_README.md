@@ -76,6 +76,8 @@
 CHITU_LLM_API_BASE=https://your-openai-compatible-host
 CHITU_LLM_API_KEY=replace-with-server-side-secret
 CHITU_ANALYSIS_MODEL=gpt-5.6-sol
+# 可选：推理模型思考档位，none/low/medium/high/xhigh/max，默认 low（留空则不传）
+CHITU_LLM_REASONING_EFFORT=low
 ```
 
 API Key 不能写进 `web/`。任何曾出现在聊天、截图或日志里的 Key，在公开部署前都应吊销并重新生成。
