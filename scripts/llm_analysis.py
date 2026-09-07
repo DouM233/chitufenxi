@@ -61,10 +61,10 @@ def load_historical_logic():
 
 
 class OpenAICompatibleClient:
-    def __init__(self):
+    def __init__(self, model=None):
         self.base_url = (os.environ.get("CHITU_LLM_API_BASE") or os.environ.get("OPENAI_BASE_URL") or "").rstrip("/")
         self.api_key = os.environ.get("CHITU_LLM_API_KEY") or os.environ.get("OPENAI_API_KEY") or ""
-        self.model = os.environ.get("CHITU_ANALYSIS_MODEL") or "gpt-5.6-sol"
+        self.model = model or os.environ.get("CHITU_ANALYSIS_MODEL") or "gpt-5.6-sol"
         # 推理模型默认档位思考 token 多、延迟高；分类/二审等结构化任务用低档即可，
         # 可通过 CHITU_LLM_REASONING_EFFORT 覆盖（none/low/medium/high/xhigh/max，留空则不传）。
         self.reasoning_effort = (os.environ.get("CHITU_LLM_REASONING_EFFORT") or "low").strip().lower() or None
@@ -77,6 +77,12 @@ class OpenAICompatibleClient:
         self.degraded_messages = 0
         self.expected_messages = 0
         self.analyzed_messages = 0
+        # 级联初分类（便宜模型）的去重/升级/用量统计，用于成本可视化。
+        self.unique_messages = 0
+        self.deduped_messages = 0
+        self.escalated_messages = 0
+        self.screener_model = ""
+        self.screener_usage = Counter()
         configured_max_attempts = int(os.environ.get("CHITU_LLM_MAX_ATTEMPTS", "0"))
         self.max_attempts = configured_max_attempts if configured_max_attempts > 0 else None
         self.usage = Counter()
@@ -205,6 +211,13 @@ class OpenAICompatibleClient:
             "prompt_tokens": self.usage["prompt_tokens"],
             "completion_tokens": self.usage["completion_tokens"],
             "total_tokens": self.usage["total_tokens"],
+            "unique_messages": self.unique_messages,
+            "deduped_messages": self.deduped_messages,
+            "escalated_messages": self.escalated_messages,
+            "screener_model": self.screener_model or None,
+            "screener_api_calls": self.screener_usage["api_calls"],
+            "screener_prompt_tokens": self.screener_usage["prompt_tokens"],
+            "screener_completion_tokens": self.screener_usage["completion_tokens"],
         }
 
 
@@ -326,7 +339,24 @@ def evenly_sample(messages, max_messages=900, max_chars=70000):
     return sample
 
 
-def build_chunks(messages, max_messages=65, max_chars=14000):
+def configured_chunk_limits():
+    """Batch caps are env-tunable: bigger batches amortize the per-call fixed prompt."""
+    try:
+        max_messages = max(20, int(os.environ.get("CHITU_CHUNK_MESSAGES", "110")))
+    except ValueError:
+        max_messages = 110
+    try:
+        max_chars = max(4000, int(os.environ.get("CHITU_CHUNK_CHARS", "24000")))
+    except ValueError:
+        max_chars = 24000
+    return max_messages, max_chars
+
+
+def build_chunks(messages, max_messages=None, max_chars=None):
+    if max_messages is None or max_chars is None:
+        env_messages, env_chars = configured_chunk_limits()
+        max_messages = max_messages or env_messages
+        max_chars = max_chars or env_chars
     chunks = []
     current = []
     used = 0
@@ -567,6 +597,221 @@ def calibrate_demand_stages(messages, taxonomy, demand_map):
     return calibrated
 
 
+DEMAND_SIGNAL_RE = re.compile(
+    r"吗|呢|？|\?|怎么|如何|为什么|啥|哪个|哪些|多少|能不能|可以不|是不是|有没有|"
+    r"不出|不热|不亮|不灵|不吸|不好用|没用|坏|漏|退|换|伤|过敏|二手|区别"
+)
+
+
+# 初筛提示词：宽进严出——mini 拿不准时倾向标记需求（靠置信度和信号词升级 sol 严判），
+# 只有确定为纯寒暄/确认/系统话术才输出无需求。置信度要求真实自评，低置信由主模型复核。
+SCREENER_SYSTEM_PROMPT = CLASSIFICATION_SYSTEM_PROMPT + (
+    "\n初筛模式补充：你是第一遍粗筛，拿不准一条消息是否包含可统计需求时，"
+    "倾向于输出该需求，置信度按你的真实判断给出（确定无误 0.95+，有明确依据 0.85 左右，"
+    "倾向但不确定 0.65 左右，仅疑似 0.4 以下）；"
+    "只有确定为纯寒暄、确认答复、情绪表达或系统话术时才不输出 demands。"
+    "你的输出随后会被主模型复核，漏报比多报更严重。"
+)
+
+
+def build_screener_client(model):
+    """Factory indirection so tests can stub the cascade screener client."""
+    return OpenAICompatibleClient(model=model)
+
+
+def dedupe_messages_for_classification(messages):
+    """Group identical (product, text) messages so the model sees one representative.
+
+    Only the label decision is shared: stage calibration and risk evidence still
+    run per message on its own context after the fan-out.
+    """
+    representatives = []
+    members = {}
+    seen = {}
+    for message in messages:
+        key = (message["product"], message["text"])
+        rep_id = seen.get(key)
+        if rep_id is None:
+            representatives.append(message)
+            rep_id = message["_llm_id"]
+            seen[key] = rep_id
+            members[rep_id] = [rep_id]
+        else:
+            members[rep_id].append(message["_llm_id"])
+    return representatives, members
+
+
+def message_cache_enabled():
+    return os.environ.get("CHITU_MESSAGE_CACHE", "1").strip().lower() not in ("0", "false", "off")
+
+
+def message_memo_path(classifier, system_prompt, taxonomy_for_prompt, message):
+    payload = json.dumps(
+        {
+            "endpoint": getattr(classifier, "endpoint", ""),
+            "model": classifier.model,
+            "classifier_contract": system_prompt,
+            "taxonomy": taxonomy_for_prompt,
+            "product": message["product"],
+            "text": message["text"],
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    directory = classifier.cache_dir / "message_cache" / digest[:2]
+    return digest, directory / f"{digest}.json"
+
+
+def load_message_memo(classifier, system_prompt, taxonomy_for_prompt, message):
+    if not message_cache_enabled():
+        return None
+    _, target = message_memo_path(classifier, system_prompt, taxonomy_for_prompt, message)
+    if not target.exists():
+        return None
+    try:
+        parsed = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    for key in ("demands", "risks", "reviews"):
+        if not isinstance(parsed.get(key), list):
+            return None
+    return parsed
+
+
+def save_message_memo(classifier, system_prompt, taxonomy_for_prompt, message, parsed):
+    if not message_cache_enabled() or not isinstance(parsed, dict):
+        return
+    _, target = message_memo_path(classifier, system_prompt, taxonomy_for_prompt, message)
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        temporary = target.with_suffix(f".{os.getpid()}.{time.time_ns()}.tmp")
+        temporary.write_text(json.dumps(parsed, ensure_ascii=False), encoding="utf-8")
+        os.replace(temporary, target)
+    except OSError:
+        pass
+
+
+def parse_chunk_rows(result):
+    """Split a raw chunk result into per-message rows; ids with no rows still count."""
+    per_message = {}
+
+    def bucket(msg_id):
+        return per_message.setdefault(str(msg_id), {"demands": [], "risks": [], "reviews": []})
+
+    for msg_id in result.get("analyzed_ids") or []:
+        bucket(str(msg_id))
+    for row in result.get("demands") or []:
+        if isinstance(row, dict):
+            msg_id = str(row.get("id") or row.get("message_id") or "")
+            if not msg_id:
+                continue
+            label = str(row.get("label") or "")
+            stage = str(row.get("stage") or "")
+            confidence = row.get("confidence", 0.9)
+        elif isinstance(row, list) and len(row) >= 2:
+            msg_id, label = str(row[0]), str(row[1])
+            if len(row) >= 4:
+                stage = str(row[2])
+                confidence = row[3]
+            elif len(row) == 3 and str(row[2]) in ("售前", "售后"):
+                stage = str(row[2])
+                confidence = 0.9
+            else:
+                stage = ""
+                confidence = row[2] if len(row) > 2 else 0.9
+        else:
+            continue
+        if label:
+            bucket(msg_id)["demands"].append({"label": label, "stage": stage, "confidence": confidence})
+    for row in result.get("risks") or []:
+        if isinstance(row, dict):
+            msg_id = str(row.get("id") or row.get("message_id") or "")
+            if not msg_id:
+                continue
+            risk_type = str(row.get("risk_type") or row.get("type") or "安全/质量异常")
+            reason = str(row.get("reason") or "模型识别为实际发生风险")
+            priority = str(row.get("priority") or "P0")
+        elif isinstance(row, list) and len(row) >= 2:
+            msg_id, risk_type = str(row[0]), str(row[1])
+            reason = str(row[2]) if len(row) > 2 else "模型识别为实际发生风险"
+            priority = str(row[3]) if len(row) > 3 else "P0"
+        else:
+            continue
+        bucket(msg_id)["risks"].append({"risk_type": risk_type[:50], "reason": reason, "priority": priority if priority in ("P0", "P1") else "P0"})
+    for row in result.get("reviews") or []:
+        if isinstance(row, dict):
+            msg_id = str(row.get("id") or row.get("message_id") or "")
+            if not msg_id:
+                continue
+            reason = str(row.get("reason") or "语义不完整")
+        elif isinstance(row, list) and len(row) >= 2:
+            msg_id, reason = str(row[0]), str(row[1])
+        else:
+            continue
+        bucket(msg_id)["reviews"].append(reason)
+    return per_message
+
+
+def apply_taxonomy_gate(per_message, messages_by_id, taxonomy_by_label):
+    """Validate parsed rows against the taxonomy; mirrors the historical fan-in rules."""
+    demand_map = defaultdict(list)
+    risks = defaultdict(list)
+    reviews = defaultdict(list)
+    for msg_id, parsed in per_message.items():
+        message = messages_by_id.get(msg_id)
+        for demand in parsed.get("demands") or []:
+            label = str(demand.get("label") or "")
+            stage = str(demand.get("stage") or "")
+            meta = taxonomy_by_label.get(label)
+            allowed_stages = (meta.get("stages") or [meta.get("stage", "售后")]) if meta else []
+            product_prefixes = (meta.get("product_prefixes") or []) if meta else []
+            product_allowed = not product_prefixes or (
+                message is not None and any(prefix in str(message["product"]) for prefix in product_prefixes)
+            )
+            if meta and msg_id and message and product_allowed:
+                if stage not in allowed_stages:
+                    stage = allowed_stages[0] if len(allowed_stages) == 1 else ""
+                if stage not in ("售前", "售后"):
+                    reviews[msg_id].append(f"词条“{label}”的售前/售后阶段无法稳定判断")
+                    continue
+                try:
+                    confidence = max(0.0, min(1.0, float(demand.get("confidence", 0.9))))
+                except (TypeError, ValueError):
+                    confidence = 0.9
+                if (stage, label) not in {(item["stage"], item["label"]) for item in demand_map[msg_id]}:
+                    demand_map[msg_id].append({"label": label, "stage": stage, "confidence": confidence})
+        for risk in parsed.get("risks") or []:
+            risks[msg_id].append(
+                {
+                    "risk_type": str(risk.get("risk_type") or "")[:50],
+                    "reason": str(risk.get("reason") or ""),
+                    "priority": risk.get("priority") if risk.get("priority") in ("P0", "P1") else "P0",
+                }
+            )
+        for reason in parsed.get("reviews") or []:
+            reviews[msg_id].append(str(reason))
+    return demand_map, risks, reviews
+
+
+def needs_screener_review(parsed, message, confidence_threshold):
+    """Deterministic triage: which screener results must the main model re-check."""
+    if parsed.get("risks") or parsed.get("reviews"):
+        return True
+    for demand in parsed.get("demands") or []:
+        try:
+            confidence = float(demand.get("confidence", 0.9))
+        except (TypeError, ValueError):
+            confidence = 0.9
+        if confidence < confidence_threshold:
+            return True
+    if not parsed.get("demands") and DEMAND_SIGNAL_RE.search(message["text"]):
+        return True
+    return False
+
+
 def classify_chunks(client, messages, taxonomy):
     taxonomy_for_prompt = [
         {
@@ -581,12 +826,16 @@ def classify_chunks(client, messages, taxonomy):
     ]
     taxonomy_by_label = {item["label"]: item for item in taxonomy}
     messages_by_id = {item["_llm_id"]: item for item in messages}
-    demand_map = defaultdict(list)
-    risks = defaultdict(list)
-    reviews = defaultdict(list)
     system_prompt = CLASSIFICATION_SYSTEM_PROMPT
     classification_cache = client.cache_dir / "classification"
     classification_cache.mkdir(parents=True, exist_ok=True)
+
+    screener_model = (os.environ.get("CHITU_CLASSIFY_MODEL") or "").strip()
+    cascade_enabled = bool(screener_model) and screener_model != client.model
+    try:
+        confidence_threshold = float(os.environ.get("CHITU_CASCADE_CONFIDENCE", "0.7"))
+    except ValueError:
+        confidence_threshold = 0.7
 
     def taxonomy_for_chunk(chunk):
         products = {str(item.get("product") or "") for item in chunk}
@@ -601,7 +850,10 @@ def classify_chunks(client, messages, taxonomy):
             )
         ]
 
-    def build_user_prompt(chunk):
+    def contract_for(classifier):
+        return SCREENER_SYSTEM_PROMPT if cascade_enabled and classifier is screener else system_prompt
+
+    def build_user_prompt(chunk, contract=None):
         return f"""V1词条：
 {json.dumps(taxonomy_for_chunk(chunk), ensure_ascii=False)}
 
@@ -624,12 +876,12 @@ def classify_chunks(client, messages, taxonomy):
 消息：
 {json.dumps(chunk, ensure_ascii=False)}"""
 
-    def result_cache_path(chunk):
+    def result_cache_path_for(classifier, chunk):
         digest = hashlib.sha256(
             json.dumps(
                 {
-                    "model": client.model,
-                    "classifier_contract": system_prompt,
+                    "model": classifier.model,
+                    "classifier_contract": contract_for(classifier),
                     "taxonomy": taxonomy_for_prompt,
                     "messages": chunk,
                 },
@@ -639,9 +891,9 @@ def classify_chunks(client, messages, taxonomy):
         ).hexdigest()
         return classification_cache / f"{digest}.json"
 
-    def save_result(chunk, result):
+    def save_result(classifier, chunk, result):
         validate_complete_batch(result, [item["id"] for item in chunk])
-        target = result_cache_path(chunk)
+        target = result_cache_path_for(classifier, chunk)
         temporary = target.with_suffix(f".{os.getpid()}.{time.time_ns()}.tmp")
         temporary.write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
         os.replace(temporary, target)
@@ -649,11 +901,12 @@ def classify_chunks(client, messages, taxonomy):
 
     min_retry_chunk_size = 8
 
-    def combine_split(chunk, split_depth):
+    def combine_split(classifier, chunk, split_depth):
         midpoint = len(chunk) // 2
-        left = analyze_chunk(chunk[:midpoint], split_depth + 1)
-        right = analyze_chunk(chunk[midpoint:], split_depth + 1)
+        left = analyze_chunk_with(classifier, chunk[:midpoint], split_depth + 1)
+        right = analyze_chunk_with(classifier, chunk[midpoint:], split_depth + 1)
         return save_result(
+            classifier,
             chunk,
             {
                 "demands": (left.get("demands") or []) + (right.get("demands") or []),
@@ -663,8 +916,9 @@ def classify_chunks(client, messages, taxonomy):
             },
         )
 
-    def analyze_chunk(chunk, split_depth=0):
-        cached_result = result_cache_path(chunk)
+    def analyze_chunk_with(classifier, chunk, split_depth=0):
+        contract = contract_for(classifier)
+        cached_result = result_cache_path_for(classifier, chunk)
         if cached_result.exists():
             try:
                 result = json.loads(cached_result.read_text(encoding="utf-8"))
@@ -676,27 +930,27 @@ def classify_chunks(client, messages, taxonomy):
                 cached_result.unlink(missing_ok=True)
 
         user_prompt = build_user_prompt(chunk)
-        token_limit = min(3500, max(900, len(chunk) * 45))
+        token_limit = min(4000, max(900, len(chunk) * 40))
         if len(chunk) > min_retry_chunk_size:
             midpoint = len(chunk) // 2
             left_chunk = chunk[:midpoint]
             right_chunk = chunk[midpoint:]
-            left_limit = min(3500, max(900, len(left_chunk) * 45))
-            right_limit = min(3500, max(900, len(right_chunk) * 45))
-            if client.has_cached(system_prompt, build_user_prompt(left_chunk), left_limit) or client.has_cached(
-                system_prompt, build_user_prompt(right_chunk), right_limit
+            left_limit = min(4000, max(900, len(left_chunk) * 40))
+            right_limit = min(4000, max(900, len(right_chunk) * 40))
+            if classifier.has_cached(contract, build_user_prompt(left_chunk), left_limit) or classifier.has_cached(
+                contract, build_user_prompt(right_chunk), right_limit
             ):
-                return combine_split(chunk, split_depth)
+                return combine_split(classifier, chunk, split_depth)
         try:
-            ensure_attempt_budget(client)
-            result = client.complete_json(system_prompt, user_prompt, max_tokens=token_limit)
-            return save_result(chunk, result)
+            ensure_attempt_budget(classifier)
+            result = classifier.complete_json(contract, user_prompt, max_tokens=token_limit)
+            return save_result(classifier, chunk, result)
         except LLMAnalysisError as exc:
             if not exc.retryable:
                 raise
-            client.invalidate_cache(system_prompt, user_prompt, token_limit)
+            classifier.invalidate_cache(contract, user_prompt, token_limit)
             if len(chunk) > min_retry_chunk_size:
-                return combine_split(chunk, split_depth)
+                return combine_split(classifier, chunk, split_depth)
             retry_number = 0
             while True:
                 retry_number += 1
@@ -708,108 +962,152 @@ def classify_chunks(client, messages, taxonomy):
                     retry_count=retry_number,
                 )
                 time.sleep(delay)
-                ensure_attempt_budget(client)
+                ensure_attempt_budget(classifier)
                 try:
-                    result = client.complete_json(system_prompt, user_prompt, max_tokens=token_limit)
-                    return save_result(chunk, result)
+                    result = classifier.complete_json(contract, user_prompt, max_tokens=token_limit)
+                    return save_result(classifier, chunk, result)
                 except LLMAnalysisError as retry_exc:
                     if not retry_exc.retryable:
                         raise
-                    client.invalidate_cache(system_prompt, user_prompt, token_limit)
+                    classifier.invalidate_cache(contract, user_prompt, token_limit)
 
-    chunks = build_chunks(messages)
-    configured_workers = max(1, int(os.environ.get("CHITU_LLM_WORKERS", "8")))
-    worker_count = min(configured_workers, len(chunks))
-    emit_progress(
-        "classifying",
-        15,
-        f"开始逐批语义分析，共 {len(chunks)} 批",
-        completed_chunks=0,
-        total_chunks=len(chunks),
-    )
-    with ThreadPoolExecutor(max_workers=worker_count) as executor:
-        future_chunks = {executor.submit(analyze_chunk, chunk): chunk for chunk in chunks}
-        completed_message_ids = set()
-        for completed, future in enumerate(as_completed(future_chunks), 1):
-            response = future.result()
-            completed_message_ids.update(str(item) for item in response.get("analyzed_ids") or [])
-            for row in response.get("demands") or []:
-                if isinstance(row, dict):
-                    msg_id = str(row.get("id") or row.get("message_id") or "")
-                    label = str(row.get("label") or "")
-                    stage = str(row.get("stage") or "")
-                    confidence = row.get("confidence", 0.9)
-                elif isinstance(row, list) and len(row) >= 2:
-                    msg_id, label = str(row[0]), str(row[1])
-                    if len(row) >= 4:
-                        stage = str(row[2])
-                        confidence = row[3]
-                    elif len(row) == 3 and str(row[2]) in ("售前", "售后"):
-                        stage = str(row[2])
-                        confidence = 0.9
-                    else:
-                        stage = ""
-                        confidence = row[2] if len(row) > 2 else 0.9
-                else:
-                    continue
-                meta = taxonomy_by_label.get(label)
-                message = messages_by_id.get(msg_id)
-                allowed_stages = meta.get("stages") or [meta.get("stage", "售后")] if meta else []
-                product_prefixes = meta.get("product_prefixes") or [] if meta else []
-                product_allowed = not product_prefixes or (
-                    message is not None and any(prefix in str(message["product"]) for prefix in product_prefixes)
+    def run_chunks(classifier, chunks, label, base_progress, span):
+        per_message = {}
+        worker_limit = max(1, int(os.environ.get("CHITU_LLM_WORKERS", "8")))
+        worker_count = min(worker_limit, len(chunks))
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            future_chunks = {executor.submit(analyze_chunk_with, classifier, chunk): chunk for chunk in chunks}
+            for completed, future in enumerate(as_completed(future_chunks), 1):
+                response = future.result()
+                for msg_id, parsed in parse_chunk_rows(response).items():
+                    per_message[msg_id] = parsed
+                emit_progress(
+                    "classifying",
+                    base_progress + int(span * completed / max(1, len(chunks))),
+                    f"{label}第 {completed}/{len(chunks)} 批聊天",
+                    completed_chunks=completed,
+                    total_chunks=len(chunks),
                 )
-                if meta and msg_id and message and product_allowed:
-                    if stage not in allowed_stages:
-                        stage = allowed_stages[0] if len(allowed_stages) == 1 else ""
-                    if stage not in ("售前", "售后"):
-                        reviews[msg_id].append(f"词条“{label}”的售前/售后阶段无法稳定判断")
-                        continue
-                    try:
-                        confidence = max(0.0, min(1.0, float(confidence)))
-                    except (TypeError, ValueError):
-                        confidence = 0.9
-                    if (stage, label) not in {(item["stage"], item["label"]) for item in demand_map[msg_id]}:
-                        demand_map[msg_id].append({"label": label, "stage": stage, "confidence": confidence})
-            for row in response.get("risks") or []:
-                if isinstance(row, dict):
-                    msg_id = str(row.get("id") or row.get("message_id") or "")
-                    risk_type = str(row.get("risk_type") or row.get("type") or "安全/质量异常")
-                    reason = str(row.get("reason") or "模型识别为实际发生风险")
-                    priority = str(row.get("priority") or "P0")
-                elif isinstance(row, list) and len(row) >= 2:
-                    msg_id, risk_type = str(row[0]), str(row[1])
-                    reason = str(row[2]) if len(row) > 2 else "模型识别为实际发生风险"
-                    priority = str(row[3]) if len(row) > 3 else "P0"
-                else:
-                    continue
-                if msg_id:
-                    risks[msg_id].append({"risk_type": risk_type[:50], "reason": reason, "priority": priority if priority in ("P0", "P1") else "P0"})
-            for row in response.get("reviews") or []:
-                if isinstance(row, dict):
-                    msg_id = str(row.get("id") or row.get("message_id") or "")
-                    reason = str(row.get("reason") or "语义不完整")
-                elif isinstance(row, list) and len(row) >= 2:
-                    msg_id, reason = str(row[0]), str(row[1])
-                else:
-                    continue
-                if msg_id:
-                    reviews[msg_id].append(reason)
-            emit_progress(
-                "classifying",
-                15 + int(70 * completed / max(1, len(chunks))),
-                f"正在分析第 {completed}/{len(chunks)} 批聊天",
-                completed_chunks=completed,
-                total_chunks=len(chunks),
-            )
+        return per_message
+
+    representatives, members = dedupe_messages_for_classification(messages)
+    deduped_messages = len(messages) - len(representatives)
+    per_message = {}
+    result_source = {}
+    pending = []
+    # 级联开启时首查初分类模型的备忘录：升级筛选必须基于 pass1 结果才能确定性重放。
+    screener = build_screener_client(screener_model) if cascade_enabled else None
+    first_lookup = screener if cascade_enabled else client
+    for rep in representatives:
+        cached = load_message_memo(first_lookup, contract_for(first_lookup), taxonomy_for_prompt, rep)
+        if cached is not None:
+            per_message[rep["_llm_id"]] = cached
+            result_source[rep["_llm_id"]] = first_lookup
+            with client._usage_lock:
+                client.cache_hits += 1
+        else:
+            pending.append(rep)
+
+    escalated_ids = set()
+    if cascade_enabled and pending:
+        # 初分类用便宜模型，思考档位独立可控（默认 none：探针实测质量足够且最快最省）；
+        # mini 在大批次下 JSON 完整性差，初分类固定用较小批次。
+        screener_effort = (os.environ.get("CHITU_SCREENER_REASONING_EFFORT") or "none").strip().lower() or None
+        screener.reasoning_effort = screener_effort
+        try:
+            screener_chunk_cap = max(20, int(os.environ.get("CHITU_SCREENER_CHUNK_MESSAGES", "60")))
+        except ValueError:
+            screener_chunk_cap = 60
+        _, screener_chars_cap = configured_chunk_limits()
+        chunks = build_chunks(pending, max_messages=screener_chunk_cap, max_chars=screener_chars_cap)
+        emit_progress(
+            "classifying",
+            18,
+            f"小模型初分类 {len(pending)} 条唯一消息，共 {len(chunks)} 批",
+            completed_chunks=0,
+            total_chunks=len(chunks),
+        )
+        pass_one = run_chunks(screener, chunks, "初分类", 18, 40)
+        with client._usage_lock:
+            client.screener_model = screener.model
+            client.screener_usage["api_calls"] += screener.calls
+            client.screener_usage["prompt_tokens"] += screener.usage["prompt_tokens"]
+            client.screener_usage["completion_tokens"] += screener.usage["completion_tokens"]
+        for rep in pending:
+            msg_id = rep["_llm_id"]
+            parsed = pass_one.get(msg_id)
+            if parsed is None:
+                # 初分类漏报该消息 id：宁可升级大模型，也不能丢消息。
+                escalated_ids.add(msg_id)
+                continue
+            save_message_memo(screener, contract_for(screener), taxonomy_for_prompt, rep, parsed)
+            if needs_screener_review(parsed, rep, confidence_threshold):
+                escalated_ids.add(msg_id)
+            else:
+                per_message[msg_id] = parsed
+                result_source[msg_id] = screener
+        escalated = [rep for rep in pending if rep["_llm_id"] in escalated_ids]
+        with client._usage_lock:
+            client.escalated_messages = len(escalated)
+        emit_progress(
+            "classifying",
+            60,
+            f"初分类完成，升级大模型复核 {len(escalated)}/{len(pending)} 条（{len(escalated) / max(1, len(pending)):.0%}）",
+        )
+    else:
+        escalated = pending
+        escalated_ids = {rep["_llm_id"] for rep in pending}
+
+    sol_pending = []
+    for rep in escalated:
+        cached = load_message_memo(client, contract_for(client), taxonomy_for_prompt, rep)
+        if cached is not None:
+            per_message[rep["_llm_id"]] = cached
+            result_source[rep["_llm_id"]] = client
+            with client._usage_lock:
+                client.cache_hits += 1
+        else:
+            sol_pending.append(rep)
+
+    if sol_pending:
+        chunks = build_chunks(sol_pending)
+        emit_progress(
+            "classifying",
+            62,
+            f"大模型精分类 {len(sol_pending)} 条，共 {len(chunks)} 批",
+            completed_chunks=0,
+            total_chunks=len(chunks),
+        )
+        pass_two = run_chunks(client, chunks, "精分类", 62, 22)
+        per_message.update(pass_two)
+        for rep in sol_pending:
+            result_source[rep["_llm_id"]] = client
+
+    for rep in representatives:
+        parsed = per_message.get(rep["_llm_id"])
+        if parsed is not None:
+            owner = result_source.get(rep["_llm_id"], client)
+            save_message_memo(owner, contract_for(owner), taxonomy_for_prompt, rep, parsed)
+
+    expanded = {}
+    for rep in representatives:
+        parsed = per_message.get(rep["_llm_id"])
+        if parsed is None:
+            continue
+        for member_id in members[rep["_llm_id"]]:
+            expanded[member_id] = parsed
+    demand_map, risks, reviews = apply_taxonomy_gate(expanded, messages_by_id, taxonomy_by_label)
+
     expected_message_ids = set(messages_by_id)
-    if completed_message_ids != expected_message_ids:
+    if set(expanded) != expected_message_ids:
         raise LLMAnalysisError(
-            f"完整性门禁失败：应分析 {len(expected_message_ids)} 条，实际确认 {len(completed_message_ids)} 条。"
+            f"完整性门禁失败：应分析 {len(expected_message_ids)} 条，实际确认 {len(expanded)} 条。"
         )
     with client._usage_lock:
         client.expected_messages = len(expected_message_ids)
-        client.analyzed_messages = len(completed_message_ids)
+        client.analyzed_messages = len(expanded)
+        client.unique_messages = len(representatives)
+        client.deduped_messages = deduped_messages
     return calibrate_demand_stages(messages, taxonomy, demand_map), risks, reviews
 
 

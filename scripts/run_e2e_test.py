@@ -36,6 +36,11 @@ env_extra = {
 if mode == "baseline":
     env_extra["CHITU_LLM_WORKERS"] = "6"
     env_extra["CHITU_LLM_REASONING_EFFORT"] = " "  # 留空 -> 不传参数，复现线上默认思考档
+elif mode == "cascade":
+    env_extra["CHITU_LLM_WORKERS"] = "12"
+    env_extra["CHITU_LLM_REASONING_EFFORT"] = "low"
+    env_extra["CHITU_CLASSIFY_MODEL"] = "gpt-5.4-mini"
+    env_extra["CHITU_CASCADE_CONFIDENCE"] = "0.7"
 else:
     env_extra["CHITU_LLM_WORKERS"] = "12"
     env_extra["CHITU_LLM_REASONING_EFFORT"] = "low"

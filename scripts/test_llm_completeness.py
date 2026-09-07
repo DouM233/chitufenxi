@@ -177,8 +177,8 @@ class CompletenessContractTests(unittest.TestCase):
                 "_llm_id": f"m{index:03d}",
                 "product": "测试产品",
                 "sender": f"买家{index}",
-                "text": "收到",
-                "context": "当前买家: 收到",
+                "text": f"收到商品{index}",
+                "context": f"当前买家: 收到商品{index}",
             }
             for index in range(1, 21)
         ]
@@ -192,7 +192,11 @@ class CompletenessContractTests(unittest.TestCase):
                 "definition": "询问产品使用方法。",
             }
         ]
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, patch.dict(
+            os.environ,
+            {"CHITU_CLASSIFY_MODEL": "", "CHITU_MESSAGE_CACHE": "0"},
+            clear=False,
+        ):
             client = SplitOnceClient(directory)
             demands, risks, reviews = llm_analysis.classify_chunks(client, messages, taxonomy)
 

@@ -78,7 +78,12 @@ CHITU_LLM_API_KEY=replace-with-server-side-secret
 CHITU_ANALYSIS_MODEL=gpt-5.6-sol
 # 可选：推理模型思考档位，none/low/medium/high/xhigh/max，默认 low（留空则不传）
 CHITU_LLM_REASONING_EFFORT=low
+# 可选：级联初分类模型（默认 gpt-5.4-mini，低置信/风险消息升级主模型复核，等效成本约 -70%）；
+# 留空关闭级联，全部分类用主模型
+CHITU_CLASSIFY_MODEL=gpt-5.4-mini
 ```
+
+成本优化内建于分类流水线：同文本消息去重（省 26~34%）、消息级缓存（重跑同文件几乎零调用）、大批次（110 条/批）。详见 `AGENTS.md`。
 
 API Key 不能写进 `web/`。任何曾出现在聊天、截图或日志里的 Key，在公开部署前都应吊销并重新生成。
 
