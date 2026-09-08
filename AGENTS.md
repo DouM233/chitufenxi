@@ -20,7 +20,7 @@
 ## 技术栈
 
 - 后端：Node.js（原生 `http`、`fetch`、`FormData`、Web Streams），无 npm 依赖
-- 分析：Python 3.11+，依赖 `openpyxl`
+- 分析：Python 3.11+，依赖 `openpyxl`（xlsx）、`xlrd`（xls 读取）
 - 前端：原生 HTML/CSS/JS（`web/`），无构建步骤
 - 模型：任意 OpenAI 兼容 `/v1/chat/completions` 服务
 
@@ -97,6 +97,7 @@ node local-server.mjs
 - 服务是单进程内存队列 + `storage/jobs` 快照；**不能多实例部署**，重启后未完成任务不可原地重试（`SERVICE_RESTARTED`）。
 - 多任务并行是安全的：每个任务独立 Python 子进程，上传/过程/结果目录均按 task_id 隔离；LLM 缓存按内容哈希共享。上游限流（429）由 Python 内置指数退避重试兜底。
 - 一个聊天文件 = 一个商品/SKU；多商品必须分文件上传，不能拼接成单文件。
+- 聊天文件支持 `.txt/.log/.csv/.xlsx/.xls`。Excel 解析规则（`parse_excel`）：自动识别表头行（前 5 行内），按关键词映射 发送者/时间/内容 三列；时间单元格支持 datetime、Excel 序列号、中英文字符串格式，统一归一化为 `YYYY-MM-DD` + `HH:MM:SS`；无表头兜底：含换行的单元格按 log 头行格式（`昵称 日期 时间`）整块解析。前端上传时在 payload 中显式标注 `role`（chat_record/baseline），后端 `roleFromPayload` 优先采用，`inferFileRole` 仅作兜底（xlsx/xls 文件名不含聊天关键词会被判为基准文件）。
 - 完整性门禁：`expected_messages` 必须等于 `analyzed_messages`，否则拒绝发布 Excel。
 - Excel 样式只来自 `templates/excel/` 母版；基准文件只提供数据，不是样式来源。
 - API Key 严禁写入 `web/`、`window.CHITU_CONFIG`、日志或接口响应。

@@ -2,9 +2,9 @@
 requires = ["nodejs-24"]
 
 [dev]
-build = ["sh", "-c", "python3 -m pip install --quiet openpyxl && pnpm install --silent"]
+build = ["sh", "-c", "python3 -m pip install --quiet openpyxl xlrd && pnpm install --silent"]
 run = ["node", "local-server.mjs"]
 
 [deploy]
-build = ["sh", "-c", "python3 -m pip install --quiet openpyxl && pnpm install --silent"]
+build = ["sh", "-c", "python3 -m pip install --quiet openpyxl xlrd && pnpm install --silent"]
 run = ["node", "local-server.mjs"]

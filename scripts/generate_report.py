@@ -5,7 +5,7 @@ import shutil
 import sys
 import warnings
 from collections import Counter, defaultdict
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from openpyxl import load_workbook
@@ -228,12 +228,11 @@ def is_generic_product_name(value):
     }
 
 
-def parse_log(product, file):
-    lines = Path(file).read_text(encoding="utf-8", errors="replace").splitlines()
+def parse_log_lines(product, lines, line_offset=0, start_conversation_id=0):
     messages = []
-    conversation_id = 0
+    conversation_id = start_conversation_id
     current = None
-    for source_line, raw in enumerate(lines, 1):
+    for source_line, raw in enumerate(lines, line_offset + 1):
         line = raw.strip()
         if not line:
             continue
@@ -252,6 +251,11 @@ def parse_log(product, file):
         elif current:
             current["text"] = f"{current['text']}\n{line}".strip()
     return messages
+
+
+def parse_log(product, file):
+    lines = Path(file).read_text(encoding="utf-8", errors="replace").splitlines()
+    return parse_log_lines(product, lines)
 
 
 def parse_csv(product, file):
@@ -316,10 +320,124 @@ def parse_csv(product, file):
     return messages
 
 
+EXCEL_SENDER_KEYS = ("发送者", "发送人", "昵称", "账号", "买家", "客户", "用户", "sender", "buyer", "user", "name")
+EXCEL_TIME_KEYS = ("时间", "日期", "date", "time")
+EXCEL_TEXT_KEYS = ("内容", "消息", "聊天", "文本", "text", "message", "content", "chat")
+
+
+def _excel_time_parts(value):
+    """把 Excel 时间单元格归一化为 (date, time) 文本。"""
+    if isinstance(value, datetime):
+        return value.strftime("%Y-%m-%d"), value.strftime("%H:%M:%S")
+    if isinstance(value, date):
+        return value.strftime("%Y-%m-%d"), ""
+    if isinstance(value, (int, float)) and 20000 < value < 80000:
+        base = datetime(1899, 12, 30) + timedelta(days=float(value))
+        return base.strftime("%Y-%m-%d"), base.strftime("%H:%M:%S")
+    text = str(value or "").strip()
+    if not text:
+        return "", ""
+    date_match = re.search(r"(\d{4})[-/年.](\d{1,2})[-/月.](\d{1,2})", text)
+    date_value = f"{date_match.group(1)}-{int(date_match.group(2)):02d}-{int(date_match.group(3)):02d}" if date_match else ""
+    time_match = re.search(r"(\d{1,2}):(\d{2})(?::(\d{2}))?", text)
+    time_value = f"{int(time_match.group(1)):02d}:{time_match.group(2)}:{time_match.group(3) or '00'}" if time_match else ""
+    return date_value, time_value
+
+
+def _excel_header_map(header_row):
+    """识别表头行并映射列；返回 (sender_idx, time_idx, text_idx) 或 None。"""
+    cells = [(idx, str(cell or "").strip()) for idx, cell in enumerate(header_row)]
+    if sum(1 for _, name in cells if name) < 2:
+        return None
+    sender_idx = time_idx = text_idx = None
+    for idx, name in cells:
+        low = name.lower()
+        if sender_idx is None and any(key in name or key in low for key in EXCEL_SENDER_KEYS):
+            sender_idx = idx
+        elif time_idx is None and any(key in name or key in low for key in EXCEL_TIME_KEYS):
+            time_idx = idx
+        elif text_idx is None and any(key in name or key in low for key in EXCEL_TEXT_KEYS):
+            text_idx = idx
+    if sender_idx is None or text_idx is None:
+        return None
+    return sender_idx, time_idx, text_idx
+
+
+def _excel_rows(file):
+    """读取 xlsx/xls 第一个工作表为二维列表。"""
+    ext = Path(file).suffix.lower()
+    if ext == ".xlsx":
+        from openpyxl import load_workbook
+
+        workbook = load_workbook(file, read_only=True, data_only=True)
+        try:
+            sheet = workbook.active
+            return [list(row) for row in sheet.iter_rows(values_only=True)]
+        finally:
+            workbook.close()
+    import xlrd
+
+    book = xlrd.open_workbook(str(file))
+    sheet = book.sheet_by_index(0)
+    return [sheet.row_values(r) for r in range(sheet.nrows)]
+
+
+def parse_excel(product, file):
+    rows = _excel_rows(file)
+    if not rows:
+        return []
+    header = None
+    data_start = 0
+    for idx, row in enumerate(rows[:5]):
+        mapped = _excel_header_map(row)
+        if mapped:
+            header = mapped
+            data_start = idx + 1
+            break
+    messages = []
+    if header:
+        sender_idx, time_idx, text_idx = header
+        for source_line, row in enumerate(rows[data_start:], data_start + 1):
+            text = str(row[text_idx]).strip() if text_idx < len(row) and row[text_idx] is not None else ""
+            if not text:
+                continue
+            sender = str(row[sender_idx]).strip() if sender_idx < len(row) and row[sender_idx] is not None else ""
+            date_value, time_value = ("", "")
+            if time_idx is not None and time_idx < len(row):
+                date_value, time_value = _excel_time_parts(row[time_idx])
+            messages.append({
+                "product": product,
+                "conversation_id": source_line - data_start - 1,
+                "sender": sender or f"row_{source_line}",
+                "date": date_value,
+                "time": time_value,
+                "text": text,
+                "source_line": source_line,
+            })
+        return messages
+    # 无表头兜底：把含"头行+正文"的大单元格按 log 文本格式解析
+    conversation_id = 0
+    for source_line, row in enumerate(rows, 1):
+        for cell in row:
+            block = str(cell or "").strip()
+            if not block:
+                continue
+            block_lines = block.splitlines()
+            if not HEADER_RE.match(block_lines[0]):
+                continue
+            parsed = parse_log_lines(product, block_lines, source_line, conversation_id)
+            if parsed:
+                conversation_id = parsed[-1]["conversation_id"] + 1
+                messages.extend(parsed)
+    return messages
+
+
 def parse_messages(product, file):
     ext = Path(file).suffix.lower()
     if ext == ".csv":
         return parse_csv(product, file)
+    if ext in (".xlsx", ".xls"):
+        return parse_excel(product, file)
     return parse_log(product, file)
 
 
