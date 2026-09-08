@@ -1022,6 +1022,9 @@ async function serveStatic(req, res) {
   const body = await readFile(target);
   res.writeHead(200, {
     "content-type": mimeTypes[ext] || "application/octet-stream",
+    // 静态资源必须每次回源校验：部署新版本后浏览器/CDN 不能再用旧缓存
+    // 的 CSS/JS 渲染新 HTML（否则会出现布局错乱，如 textarea 塌缩）。
+    "cache-control": "no-cache",
     "access-control-allow-origin": corsOrigin
   });
   res.end(body);
