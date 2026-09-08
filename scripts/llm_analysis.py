@@ -449,13 +449,31 @@ def discover_taxonomy(client, messages, task_context="", baseline_context="", hi
             "V1 词条建立",
         )
 
-    while True:
+    def _normalize_stage(value):
+        text = str(value or "").strip().lower()
+        if "售后" in text or "post" in text:
+            return "售后"
+        if "售前" in text or "pre" in text or "咨询" in text or "sales" in text:
+            return "售前"
+        return ""
+
+    labels = []
+    attempt = 0
+    for attempt in range(1, 7):
         labels = []
         seen = set()
-        for item in response.get("labels") or []:
-            label = str(item.get("label") or "").strip()[:40]
-            stage = str(item.get("stage") or "").strip()
-            if not label or stage not in ("售前", "售后") or label in seen:
+        raw_labels = response.get("labels")
+        if not raw_labels and isinstance(response, dict):
+            for alt_key in ("categories", "taxonomy", "items", "词条"):
+                if response.get(alt_key):
+                    raw_labels = response[alt_key]
+                    break
+        for item in raw_labels or []:
+            if not isinstance(item, dict):
+                item = {"label": str(item)}
+            label = str(item.get("label") or item.get("name") or "").strip()[:40]
+            stage = _normalize_stage(item.get("stage") or item.get("stage_name") or item.get("phase"))
+            if not label or not stage or label in seen:
                 continue
             seen.add(label)
             priority = str(item.get("priority") or "P2").upper()
@@ -473,16 +491,23 @@ def discover_taxonomy(client, messages, task_context="", baseline_context="", hi
             )
         if len(labels) >= 6:
             break
+        if attempt >= 6:
+            break
+        if len(labels) >= 3:
+            emit_progress("retrying", 12, f"V1 词条仅识别出 {len(labels)} 个，直接采用并继续")
+            break
         client.invalidate_cache(system_prompt, selected_prompt, selected_tokens)
-        emit_progress("retrying", 12, "V1 词条返回不完整，正在重新建立")
+        emit_progress("retrying", 12, f"V1 词条返回不完整（第 {attempt} 次重建），正在重新建立")
         time.sleep(3)
         response = complete_json_required(
             client,
             system_prompt,
-            selected_prompt,
+            selected_prompt + f"\n\n补充要求（第 {attempt + 1} 次生成）：labels 数组必须给出至少 6 个对象；每个对象必须含 label 与 stage 字段，stage 只能取「售前」或「售后」两个值。",
             selected_tokens,
             "V1 词条建立",
         )
+    if len(labels) < 3:
+        raise RuntimeError(f"V1 词条建立失败：{attempt} 次尝试均不足 3 个有效词条，请检查聊天样本质量后重试")
     return labels, [str(item) for item in (response.get("analysis_notes") or [])[:8]]
 
 

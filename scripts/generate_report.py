@@ -42,6 +42,8 @@ EXPECTED_SHEETS = [
 HEADER_RE = re.compile(r"^(.+?)\s+(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2}:\d{2})\s*$")
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 TIME_RE = re.compile(r"^\d{2}:\d{2}:\d{2}$")
+# 网页版聊天导出常夹带非法控制字符（如 \x03），统一清洗（保留 \t \n \r）
+CTRL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 URL_RE = re.compile(r"https?://\S+")
 ORDER_RE = re.compile(r"(订单号|商品ID|商品号|商品编号)[:：]?\s*\d+", re.I)
 SERVICE_SENDER_PATTERNS = (
@@ -265,7 +267,7 @@ def parse_csv(product, file):
         source_record_count = len(rows)
         for csv_line, row in enumerate(rows, start=2):
             buyer = (row.get("buyer") or row.get("买家") or row.get("客户昵称") or "").strip()
-            chat_text = row.get("chat_text") or row.get("聊天内容") or row.get("content") or row.get("message") or ""
+            chat_text = CTRL_CHARS_RE.sub("", row.get("chat_text") or row.get("聊天内容") or row.get("content") or row.get("message") or "")
             current_date = row.get("chat_date") or row.get("日期") or ""
             range_match = re.search(
                 r"(\d{4}-\d{2}-\d{2}).*?(\d{4}-\d{2}-\d{2})",
@@ -382,6 +384,57 @@ def _excel_rows(file):
     return [sheet.row_values(r) for r in range(sheet.nrows)]
 
 
+def parse_excel_session_rows(product, rows, source_record_count):
+    """解析"一行一会话"的导出结构（chat_text 为整段会话大文本）。
+
+    块内规则与 csv 全量导出解析一致：日期行/时间行 -> 内容块 -> 块尾发送者行。
+    """
+    messages = []
+    for csv_line, row in enumerate(rows, start=2):
+        buyer = (row.get("buyer") or "").strip()
+        chat_text = CTRL_CHARS_RE.sub("", row.get("chat_text") or "")
+        current_date = row.get("chat_date") or ""
+        range_match = re.search(r"(\d{4}-\d{2}-\d{2}).*?(\d{4}-\d{2}-\d{2})", row.get("filter_range") or "")
+        range_start, range_end = range_match.groups() if range_match else ("", "")
+        lines = [line.strip() for line in chat_text.splitlines() if line.strip()]
+        for index, line in enumerate(lines):
+            if DATE_RE.fullmatch(line):
+                current_date = line
+                continue
+            if not TIME_RE.fullmatch(line):
+                continue
+            end = index + 1
+            while (
+                end < len(lines)
+                and not TIME_RE.fullmatch(lines[end])
+                and not DATE_RE.fullmatch(lines[end])
+                and lines[end] != "没有更多内容了"
+            ):
+                end += 1
+            block = lines[index + 1 : end]
+            if len(block) < 2:
+                continue
+            sender = block[-1].strip()
+            text = "\n".join(block[:-1]).strip()
+            if not sender or not text:
+                continue
+            messages.append(
+                {
+                    "product": product,
+                    "conversation_id": csv_line - 2,
+                    "sender": sender,
+                    "role": "buyer" if buyer and sender == buyer else "service",
+                    "date": current_date,
+                    "time": line,
+                    "text": text,
+                    "source_line": csv_line,
+                    "source_record_count": source_record_count,
+                    "in_filter_range": (not range_start) or (range_start <= current_date <= range_end),
+                }
+            )
+    return messages
+
+
 def parse_excel(product, file):
     rows = _excel_rows(file)
     if not rows:
@@ -397,6 +450,31 @@ def parse_excel(product, file):
     messages = []
     if header:
         sender_idx, time_idx, text_idx = header
+        # 内容列若是"整段会话大文本"（与 csv 全量导出同构：块内多组"账号+时间行"），按会话块规则拆分
+        sample_texts = []
+        for row in rows[data_start:]:
+            value = str(row[text_idx]).strip() if text_idx < len(row) and row[text_idx] is not None else ""
+            if value:
+                sample_texts.append(value)
+            if len(sample_texts) >= 5:
+                break
+        session_like = sum(1 for value in sample_texts if len(re.findall(r"\d{2}:\d{2}:\d{2}", value)) >= 2)
+        if sample_texts and session_like >= max(1, len(sample_texts) // 2):
+            session_rows = []
+            for row in rows[data_start:]:
+                sender = str(row[sender_idx]).strip() if sender_idx < len(row) and row[sender_idx] is not None else ""
+                text = str(row[text_idx]).strip() if text_idx < len(row) and row[text_idx] is not None else ""
+                if not text:
+                    continue
+                record = {"chat_text": text}
+                if sender:
+                    record["buyer"] = sender
+                if time_idx is not None and time_idx < len(row):
+                    date_value, _time_value = _excel_time_parts(row[time_idx])
+                    if date_value:
+                        record["chat_date"] = date_value
+                session_rows.append(record)
+            return parse_excel_session_rows(product, session_rows, len(session_rows))
         for source_line, row in enumerate(rows[data_start:], data_start + 1):
             text = str(row[text_idx]).strip() if text_idx < len(row) and row[text_idx] is not None else ""
             if not text:
