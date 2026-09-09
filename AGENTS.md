@@ -98,10 +98,11 @@ node local-server.mjs
 - 多任务并行是安全的：每个任务独立 Python 子进程，上传/过程/结果目录均按 task_id 隔离；LLM 缓存按内容哈希共享。上游限流（429）由 Python 内置指数退避重试兜底。
 - 一个聊天文件 = 一个商品/SKU；多商品必须分文件上传，不能拼接成单文件。
 - 聊天文件支持 `.txt/.log/.csv/.xlsx/.xls`。Excel 解析规则（`parse_excel`）：自动识别表头行（前 5 行内），按关键词映射 发送者/时间/内容 三列；时间单元格支持 datetime、Excel 序列号、中英文字符串格式，统一归一化为 `YYYY-MM-DD` + `HH:MM:SS`；无表头兜底：含换行的单元格按 log 头行格式（`昵称 日期 时间`）整块解析。前端上传时在 payload 中显式标注 `role`（chat_record/baseline），后端 `roleFromPayload` 优先采用，`inferFileRole` 仅作兜底（xlsx/xls 文件名不含聊天关键词会被判为基准文件）。
-- **Excel "一行一会话"大文本结构**（`parse_excel_session_rows`）：内容列若采样到 ≥2 个 `HH:MM:SS` 时间行（网页版聊天导出同构，一行=一个完整会话），自动切换为会话块解析——块内规则与 csv 全量导出解析一致（日期行/时间行 → 内容块 → 块尾发送者行），产出单条消息粒度。实测 657 会话可拆出 1.67 万条消息（P50 21 字），与 csv 路径解析结果逐条 100% 一致。**禁止**把整段会话当单条消息送 LLM——会导致词条建立采样全是混合长文、有效词条 <6 而重试循环。
+- **Excel "一行一会话"大文本结构**（`excel_to_csv_file`）：内容列若采样到 ≥2 个 `HH:MM:SS` 时间行（网页版聊天导出同构，一行=一个完整会话），自动转换成标准 csv（buyer/chat_date/chat_text 三列，保留在任务目录可核对），之后**完全复用 csv 解析路径**（parse_csv）；逐行消息/无表头结构仍走 parse_excel。实测 120 会话转换后与 csv 基准逐条 100% 一致。**禁止**把整段会话当单条消息送 LLM——会导致词条建立采样全是混合长文而失败。
+- **消息 role 判定（csv/Excel 会话路径）**：`role = "service" if ":" in sender else "buyer"`——客服千牛账号必带"店铺:名字"半角冒号前缀；buyer 列（昵称）与块内发送者（账号）常常不同名，不能只靠精确匹配，否则 0 买家消息直接报"没有可供模型分析的有效买家消息"。
 - 网页版聊天导出常夹带非法控制字符（如 `\x03`），csv/Excel 两条路径统一用 `CTRL_CHARS_RE` 清洗（保留 `\t \n \r`）。
 - V1 词条建立容错（`llm_analysis.py: build_taxonomy`）：stage 值归一化（"售前咨询"等变体也接受）、labels 键名兜底（categories/taxonomy/items/词条）、重试上限 6 次且每次重试追加 prompt 强化要求；重试后 ≥3 个词条放行并告警，<3 个明确报错终止（不再无限 while True 同 prompt 重试）。
-- 消息 role 只认英文值 `"buyer"`/`"service"`（`is_valid_customer_message` 与上下文窗口标记均按此判定）；csv/Excel 会话块路径均用"发送者 == buyer 列"判定买家，网页版导出中 buyer 是昵称、块尾发送者是账号，买家占比 ~36% 属正常。
+- 消息 role 只认英文值 `"buyer"`/`"service"`（`is_valid_customer_message` 与上下文窗口标记均按此判定）；csv/Excel 会话块路径用半角冒号规则判定（见上条）。
 - 完整性门禁：`expected_messages` 必须等于 `analyzed_messages`，否则拒绝发布 Excel。
 - Excel 样式只来自 `templates/excel/` 母版；基准文件只提供数据，不是样式来源。
 - API Key 严禁写入 `web/`、`window.CHITU_CONFIG`、日志或接口响应。
